@@ -145,16 +145,77 @@ void parse_header_files(JFILE *jfp, const char *base, fdebuf_t *pfdb)
   chbfini(&kcb), chbfini(&ncb);
 }
 
+void unparse_header_files(JFILE *jfp, fdebuf_t *pfdb)
+{
+  size_t i; chbuf_t cb = mkchb();
+  jfputobrc(jfp);
+  for (i = 0; i < fdeblen(pfdb); ++i) {
+    fdent_t *pfde = fdebref(pfdb, i);
+    if (pfde->name) jfputkey(jfp, pfde->name);
+    jfputobrc(jfp);
+    if (pfde->isdir) {
+      jfputkey(jfp, "files");
+      unparse_header_files(jfp, &pfde->files);
+    } else {
+      jfputkey(jfp, "offset");
+      jfputstr(jfp, chbsetf(&cb, "%llu", pfde->offset)); 
+      jfputkey(jfp, "size");
+      jfputnumull(jfp, pfde->size);
+      if (pfde->executable) { 
+        jfputkey(jfp, "executable"); 
+        jfputbool(jfp, true); 
+      }
+      if (pfde->unpacked) { 
+        jfputkey(jfp, "unpacked"); 
+        jfputbool(jfp, true); 
+      }
+      if (pfde->integrity_algorithm) {
+        jfputkey(jfp, "integrity"); 
+        jfputobrc(jfp);
+        jfputkey(jfp, "algorithm"); 
+        jfputstr(jfp, pfde->integrity_algorithm);
+        if (pfde->integrity_hash) {
+          jfputkey(jfp, "hash"); 
+          jfputstr(jfp, pfde->integrity_hash);
+        }
+        if (pfde->integrity_block_size) {
+          size_t k;
+          jfputkey(jfp, "blockSize"); 
+          jfputnumull(jfp, pfde->integrity_block_size);
+          jfputkey(jfp, "blocks");
+          jfputobrk(jfp);
+          for (k = 0; k < dsblen(&pfde->integrity_blocks); ++k) {
+            dstr_t *pds = dsbref(&pfde->integrity_blocks, k);
+            jfputstr(jfp, *pds);
+          }
+          jfputcbrk(jfp);
+        }
+        jfputcbrc(jfp);
+      }
+    }
+    jfputcbrc(jfp);
+  }
+  jfputcbrc(jfp);
+  chbfini(&cb);  
+}
+
 void parse_header(chbuf_t *pcb, fdebuf_t *pfdb)
 {
-  char *pc = pcb->buf; JFILE *jfp = newjfii(strptr_pii, &pc);
+  char *pc = pcb->buf; 
+  JFILE *jfpi = newjfii(strptr_pii, &pc);
+  JFILE *jfpo = newjfoi(FILE_poi, stdout);
   chbuf_t kcb = mkchb(); 
-  jfgetobrc(jfp);
-  jfgetkey(jfp, &kcb); /* "files": */
+  jfgetobrc(jfpi);
+  jfgetkey(jfpi, &kcb); /* "files": */
   if (!streql(chbdata(&kcb), "files")) exprintf("%s: invalid file list", g_ar);
-  parse_header_files(jfp, "", pfdb);
-  jfgetcbrc(jfp);
-  freejf(jfp);
+  parse_header_files(jfpi, "", pfdb);
+  jfgetcbrc(jfpi);
+  freejf(jfpi);
+  jfputobrc(jfpo);
+  jfputkey(jfpo, "files");
+  unparse_header_files(jfpo, pfdb);
+  jfputcbrc(jfpo);
+  freejf(jfpo);
   chbfini(&kcb);
 }
 

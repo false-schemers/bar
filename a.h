@@ -26,7 +26,7 @@ typedef buf_t fdebuf_t;
 extern fdebuf_t* fdebinit(fdebuf_t* mem);
 extern void fdebfini(fdebuf_t* pb);
 #define fdeblen(pb) (buflen(pb))
-#define fdebref(pb, i) ((dstr_t*)bufref(pb, i))
+#define fdebref(pb, i) ((fdent_t*)bufref(pb, i))
 #define fdebnewbk(pb) (fdeinit(bufnewbk(pb)))
 
 
