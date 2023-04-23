@@ -1,6 +1,7 @@
 /* b.c (base) -- esl */
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -130,6 +131,13 @@ bool strieql(const char *s1, const char *s2)
     break; 
   }
   return *s1 == 0 && *s2 == 0;
+}
+
+size_t strcnt(const char *str, int c)
+{
+  int c1; size_t cnt = 0; assert(str);
+  while ((c1 = *str++)) if (c1 == c) ++cnt;
+  return cnt;
 }
 
 void memswap(void *mem1, void *mem2, size_t sz)
@@ -1921,6 +1929,1301 @@ static oi_t cbuf_oi = {
   null_ctl
 };
 poi_t cbuf_poi = &cbuf_oi; 
+
+
+/* json i/o "file" */
+
+typedef struct jfile_tag {
+  /* i/o stream */
+  size_t (*read)(void*, size_t, size_t, void*);
+  size_t (*write)(const void*, size_t, size_t, void*);
+  int (*getc)(void*);
+  int (*ungetc)(int, void*);
+  int (*putc)(int, void*);
+  int (*puts)(const char*, void*);
+  int (*flush)(void*);
+  void* pfile;
+  dstr_t fname;
+  int lineno;
+  int indent;
+  int tt; /* lookahead token type or -1 */
+  bool autoflush;
+  /* tmp bufs */
+  chbuf_t tbuf; /* token */
+} jfile_t;
+
+static void jfile_init_ii(jfile_t* pjf, pii_t pii, void* dp, bool bbuf)
+{
+  assert(pjf); assert(pii);
+  memset(pjf, 0, sizeof(jfile_t));
+  pjf->pfile = dp;
+  pjf->read = pii->read;
+  pjf->getc = pii->getc;
+  pjf->ungetc = pii->ungetc;
+  pjf->write = null_poi->write;
+  pjf->putc = null_poi->putc;
+  pjf->puts = null_poi->puts;
+  pjf->flush = null_poi->flush;
+  pjf->lineno = 1;
+  pjf->indent = 0;
+  pjf->tt = -1;
+  pjf->autoflush = !bbuf;
+  chbinit(&pjf->tbuf);
+}
+
+static void jfile_init_oi(jfile_t* pjf, poi_t poi, void* dp, bool bbuf)
+{
+  assert(pjf); assert(poi);
+  memset(pjf, 0, sizeof(jfile_t));
+  pjf->pfile = dp;
+  pjf->read = null_pii->read;
+  pjf->getc = null_pii->getc;
+  pjf->ungetc = null_pii->ungetc;
+  pjf->write = poi->write;
+  pjf->putc = poi->putc;
+  pjf->puts = poi->puts;
+  pjf->flush = poi->flush;
+  pjf->lineno = 1;
+  pjf->indent = 0;
+  pjf->tt = -1;
+  pjf->autoflush = !bbuf;
+  chbinit(&pjf->tbuf);
+}
+
+static void jfile_fini(jfile_t* pjf) 
+{
+  free(pjf->fname); 
+  chbfini(&pjf->tbuf);
+}
+
+static void jfile_close(jfile_t* pjf) 
+{
+  if (pjf) {
+    free(pjf->fname); 
+    chbfini(&pjf->tbuf);
+    if (pjf->read == (size_t (*)(void*, size_t, size_t, void*))&fread ||
+        pjf->write == (size_t (*)(const void*, size_t, size_t, void*))&fwrite) {
+      fclose(pjf->pfile);
+    }
+  }
+}
+
+static void jfile_verr(bool in, jfile_t* pjf, const char *fmt, va_list args)
+{
+  assert(pjf);
+  assert(fmt);
+  chbclear(&pjf->tbuf);
+  chbputvf(&pjf->tbuf, fmt, args);
+  pjf->tt = -2;
+  /* for now, just print error and exit; todo: longjmp */
+  fprintf(stderr, "JSON error: %s\naborting execution...", chbdata(&pjf->tbuf));
+  exit(EXIT_FAILURE);
+}
+
+static void jfile_ierr(jfile_t* pjf, const char *fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+  jfile_verr(true, pjf, fmt, args);
+  va_end(args);
+}
+
+static 
+void jfile_oerr(jfile_t* pjf, const char *fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+  jfile_verr(false, pjf, fmt, args);
+  va_end(args);
+}
+
+/* json token types */
+typedef enum jtoken_tag {
+  JTK_WHITESPACE,
+  JTK_NULL,
+  JTK_TRUE,
+  JTK_FALSE,
+  JTK_INT,
+  JTK_UINT,
+  JTK_FLOAT,
+  JTK_STRING,
+  JTK_OBRK,
+  JTK_CBRK,
+  JTK_OBRC,
+  JTK_CBRC,
+  JTK_COMMA,
+  JTK_COLON,
+  JTK_EOF
+} jtoken_t;
+
+/* jlex: splits input into tokens delivered via char buf [from jsonlex.ss, patched!] */
+static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *in, chbuf_t *pcb)
+{
+  int c; 
+  bool gotminus = false;
+  assert(pcb);
+
+  chbclear(pcb);
+  goto state_0;
+  state_0:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == ':') {
+      chbputc(c, pcb);
+      goto state_14;
+    } else if (c == ',') {
+      chbputc(c, pcb);
+      goto state_13;
+    } else if (c == '}') {
+      chbputc(c, pcb);
+      goto state_12;
+    } else if (c == '{') {
+      chbputc(c, pcb);
+      goto state_11;
+    } else if (c == ']') {
+      chbputc(c, pcb);
+      goto state_10;
+    } else if (c == '[') {
+      chbputc(c, pcb);
+      goto state_9;
+    } else if (c == '\"') {
+      chbputc(c, pcb);
+      goto state_8;
+    } else if (c == '-') {
+      chbputc(c, pcb);
+      gotminus = true;
+      goto state_7;
+    } else if (c == '0') {
+      chbputc(c, pcb);
+      goto state_6;
+    } else if ((c >= '1' && c <= '9')) {
+      chbputc(c, pcb);
+      goto state_5;
+    } else if (c == 'f') {
+      chbputc(c, pcb);
+      goto state_4;
+    } else if (c == 't') {
+      chbputc(c, pcb);
+      goto state_3;
+    } else if (c == 'n') {
+      chbputc(c, pcb);
+      goto state_2;
+    } else if (c == '\t' || c == '\n' || c == '\r' || c == ' ') {
+      chbputc(c, pcb);
+      goto state_1;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_1:
+    c = in_getc(in);
+    if (c == EOF) {
+      return JTK_WHITESPACE;
+    } else if (c == '\t' || c == '\n' || c == '\r' || c == ' ') {
+      chbputc(c, pcb);
+      goto state_1;
+    } else {
+      in_ungetc(c, in);
+      return JTK_WHITESPACE;
+    }
+  state_2:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == 'u') {
+      chbputc(c, pcb);
+      goto state_33;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_3:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == 'r') {
+      chbputc(c, pcb);
+      goto state_30;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_4:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == 'a') {
+      chbputc(c, pcb);
+      goto state_26;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_5:
+    c = in_getc(in);
+    if (c == EOF) {
+      return gotminus ? JTK_INT : JTK_UINT;
+    } else if (c == '.') {
+      chbputc(c, pcb);
+      goto state_22;
+    } else if (c == 'E' || c == 'e') {
+      chbputc(c, pcb);
+      goto state_21;
+    } else if ((c >= '0' && c <= '9')) {
+      chbputc(c, pcb);
+      goto state_5;
+    } else {
+      in_ungetc(c, in);
+      return gotminus ? JTK_INT : JTK_UINT;
+    }
+  state_6:
+    c = in_getc(in);
+    if (c == EOF) {
+      return gotminus ? JTK_INT : JTK_UINT;
+    } else if (c == '.') {
+      chbputc(c, pcb);
+      goto state_22;
+    } else if (c == 'E' || c == 'e') {
+      chbputc(c, pcb);
+      goto state_21;
+    } else {
+      in_ungetc(c, in);
+      return gotminus ? JTK_INT : JTK_UINT;
+    }
+  state_7:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == '0') {
+      chbputc(c, pcb);
+      goto state_6;
+    } else if ((c >= '1' && c <= '9')) {
+      chbputc(c, pcb);
+      goto state_5;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_8:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == '\\') {
+      chbputc(c, pcb);
+      goto state_16;
+    } else if (c == '\"') {
+      chbputc(c, pcb);
+      goto state_15;
+    } else if (!((c >= 0x00 && c <= 0x1F) /* this place is patched! */
+                 || c == '\"' || c == '\\')) {
+      chbputc(c, pcb);
+      goto state_8;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_9:
+    return JTK_OBRK;
+  state_10:
+    return JTK_CBRK;
+  state_11:
+    return JTK_OBRC;
+  state_12:
+    return JTK_CBRC;
+  state_13:
+    return JTK_COMMA;
+  state_14:
+    return JTK_COLON;
+  state_15:
+    return JTK_STRING;
+  state_16:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == 'u') {
+      chbputc(c, pcb);
+      goto state_17;
+    } else if (c == '\"' || c == '/' || c == '\\' || c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't') {
+      chbputc(c, pcb);
+      goto state_8;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_17:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
+      chbputc(c, pcb);
+      goto state_18;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_18:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
+      chbputc(c, pcb);
+      goto state_19;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_19:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
+      chbputc(c, pcb);
+      goto state_20;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_20:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
+      chbputc(c, pcb);
+      goto state_8;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_21:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == '+' || c == '-') {
+      chbputc(c, pcb);
+      goto state_25;
+    } else if ((c >= '0' && c <= '9')) {
+      chbputc(c, pcb);
+      goto state_24;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_22:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if ((c >= '0' && c <= '9')) {
+      chbputc(c, pcb);
+      goto state_23;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_23:
+    c = in_getc(in);
+    if (c == EOF) {
+      return JTK_FLOAT;
+    } else if ((c >= '0' && c <= '9')) {
+      chbputc(c, pcb);
+      goto state_23;
+    } else if (c == 'E' || c == 'e') {
+      chbputc(c, pcb);
+      goto state_21;
+    } else {
+      in_ungetc(c, in);
+      return JTK_FLOAT;
+    }
+  state_24:
+    c = in_getc(in);
+    if (c == EOF) {
+      return JTK_FLOAT;
+    } else if ((c >= '0' && c <= '9')) {
+      chbputc(c, pcb);
+      goto state_24;
+    } else {
+      in_ungetc(c, in);
+      return JTK_FLOAT;
+    }
+  state_25:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if ((c >= '0' && c <= '9')) {
+      chbputc(c, pcb);
+      goto state_24;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_26:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == 'l') {
+      chbputc(c, pcb);
+      goto state_27;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_27:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == 's') {
+      chbputc(c, pcb);
+      goto state_28;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_28:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == 'e') {
+      chbputc(c, pcb);
+      goto state_29;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_29:
+    return JTK_FALSE;
+  state_30:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == 'u') {
+      chbputc(c, pcb);
+      goto state_31;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_31:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == 'e') {
+      chbputc(c, pcb);
+      goto state_32;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_32:
+    return JTK_TRUE;
+  state_33:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == 'l') {
+      chbputc(c, pcb);
+      goto state_34;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_34:
+    c = in_getc(in);
+    if (c == EOF) {
+      goto err;
+    } else if (c == 'l') {
+      chbputc(c, pcb);
+      goto state_35;
+    } else {
+      in_ungetc(c, in);
+      goto err;
+    }
+  state_35:
+    return JTK_NULL;
+
+  err:
+    return JTK_EOF;
+}
+
+/* peek at the next non-whitespace token in the stream */
+static jtoken_t jfile_peekt(jfile_t* pjf)
+{
+  if (pjf->tt >= 0) {
+    /* lookahead token is in tbuf already */
+    assert(pjf->tt > JTK_WHITESPACE && pjf->tt <= JTK_EOF);
+    return (jtoken_t)pjf->tt; 
+  } 
+  assert(chbempty(&pjf->tbuf));
+  for (;;) {
+    jtoken_t tk = jlex(pjf->getc, pjf->ungetc, pjf->pfile, &pjf->tbuf);
+    if (tk == JTK_EOF) {
+      int c = (pjf->getc)(pjf->pfile);
+      if (c == EOF) { 
+        /* real EOF */
+        pjf->tt = JTK_EOF;
+        chbclear(&pjf->tbuf);
+        return JTK_EOF;
+      } else {
+        /* lex error */
+        (pjf->ungetc)(c, pjf->pfile);
+        jfile_ierr(pjf, "unexpected character: %c", c);
+      }
+    } else if (tk == JTK_WHITESPACE) {
+      pjf->lineno += (int)strcnt(chbdata(&pjf->tbuf), '\n');
+      chbclear(&pjf->tbuf);
+      continue;
+    } else {
+      pjf->tt = tk;
+      return tk;
+    }
+  } 
+}
+
+/* drop next token in the stream */
+static void jfile_dropt(jfile_t* pjf)
+{
+  /* clear lookehead unless it is real EOF */
+  if (pjf->tt >= 0 && pjf->tt != JTK_EOF) {
+    pjf->tt = -1;
+    chbclear(&pjf->tbuf);
+  }
+}
+
+/* decode lookahead string token as utf-8 into pcb */
+static char* jfile_tstring(jfile_t* pjf, chbuf_t* pcb)
+{
+  char *ts; int32_t c32h = 0;
+  assert(pjf->tt == JTK_STRING);
+  chbclear(pcb);
+  ts = chbdata(&pjf->tbuf);
+  /* convert surrogate pairs to normal unicode chars */
+  assert(*ts == '\"');
+  for (ts += 1; *ts != '\"'; ) {
+    int32_t c32;
+    if (*ts == '\\') {
+      if (ts[1] == '/') c32 = '/', ts+= 2; /* JSON-specific escape */
+      else c32 = strtocc32(ts, &ts, NULL); /* other JSON escapes are subset of C99 */
+    } else {
+      c32 = (int32_t)strtou8c(ts, &ts);
+    }
+    if (c32 == -1) jfile_ierr(pjf, "invalid chars in string: %.6s...", ts);
+    /* TODO: check c32 for valid UNICODE char ranges */
+    if (c32 >= 0xD800 && c32 <= 0xDBFF) {
+      /* first char of a surrogate pair */
+      if (c32h != 0) jfile_ierr(pjf, "surrogate char sequence error");
+      c32h = c32;
+      continue;
+    } else if (c32 >= 0xDC00 && c32 <= 0xDFFF) {
+      /* second char of a surrogate pair */
+      if (c32h == 0) jfile_ierr(pjf, "surrogate char sequence error");
+      /* note: UTF-16 rfc2781 allows high part to be zero (c32h == 0xD800)! */
+      c32 = ((c32h - 0xD800) << 10) + (c32 - 0xDC00);
+      c32h = 0;
+    }
+    chbputlc(c32, pcb);
+  }
+  /* check for incomplete surrogates */
+  if (c32h != 0) jfile_ierr(pjf, "surrogate char sequence error");
+  /* note: pcb may legally contain zeroes! */
+  return chbdata(pcb);
+}
+
+
+/* encode utf-8 string of length n into token buf */
+static void jfile_tunstring(jfile_t* pjf, const char *str, size_t n)
+{
+  chbuf_t *pcb = &pjf->tbuf; char buf[40];
+  chbclear(pcb);
+  chbputc('\"', pcb);
+  while (n > 0) {
+    int32_t c32; char *end;
+    int c = *str & 0xFF;
+    /* check for control chars manually */
+    if (c <= 0x1F) {
+      switch (c) {
+        case '\b' : chbputs("\\b", pcb); break;
+        case '\f' : chbputs("\\f", pcb); break;
+        case '\n' : chbputs("\\n", pcb); break;
+        case '\r' : chbputs("\\r", pcb); break;
+        case '\t' : chbputs("\\t", pcb); break;
+        default   : sprintf(buf, "\\u%.4X", c); chbputs(buf, pcb); break;
+      }
+      ++str; --n;
+      continue;
+    } else if (c == '\"' || c == '\\') {
+      /* note: / can be left unescaped */
+      switch (c) {
+        case '\"' : chbputs("\\\"", pcb); break;
+        case '\\' : chbputs("\\\\", pcb); break;
+        case '/' :  chbputs("\\/", pcb); break;
+      }
+      ++str; --n;
+      continue;
+    }
+    /* get next unocode char */
+    c32 = (int32_t)strtou8c(str, &end);
+    if (c32 == -1) jfile_ierr(pjf, "broken utf-8 encoding: %.10s...", str);
+    if (end > str+n) jfile_ierr(pjf, "cut-off utf-8 encoding: %.10s...", str);
+    if (c32 <= 0x1F) {
+      /* should have been taken care of above! */
+      assert(false);
+    } else if (c32 <= 0x80) {
+      /* put ascii chars as-is */
+      assert(c32 == c && end == str+1);
+      chbputc(c, pcb);
+    } else if (c32 <= 0xFFFF) {
+      /* BMP (TODO: check for non-chars such as U+FFFF and surrogates!) */
+      /* if ??? jfile_ierr(pjf, "invalid utf-8 encoding: %.10s...", str); */
+      /* was: cbput8c(c32, pcb); */
+      sprintf(buf, "\\u%.4X", (int)c32); chbputs(buf, pcb);
+    } else if (c32 <= 0x10FFFF) {
+      /* legal space above bmp; encode as two surrogates */
+      int32_t v = c32 - 0x10000, c1 = 0xD800 + ((v >> 10) & 0x3FF), c2 = 0xDC00 + (v & 0x3FF);
+      sprintf(buf, "\\u%.4X\\u%.4X", c1, c2); chbputs(buf, pcb);
+    } else {
+      /* char outside Unicode range? */
+      jfile_ierr(pjf, "nonstandard utf-8 encoding: %.10s...", str);
+    }
+    n -= (size_t)(end-str); str = end;
+  }
+  chbputc('\"', pcb);
+}
+
+/* decode lookahead number token */
+static double jfile_tnumberd(jfile_t* pjf)
+{
+  char *ts; double d;
+  assert(pjf->tt >= JTK_INT && pjf->tt <= JTK_FLOAT);
+  ts = chbdata(&pjf->tbuf);
+  d = strtod(ts, &ts);
+  assert(ts && !*ts);
+  return d;
+}
+
+/* encode number into token buf */
+static void jfile_tunnumberd(jfile_t* pjf, double num)
+{
+  char buf[30], *pc = buf;
+  chbuf_t *pcb = &pjf->tbuf;
+  sprintf(buf, "%.15g", num);
+  /* the format above may produce [-]{inf...|nan...} */
+  if (*pc == '-') ++pc;
+  if (!isdigit(*pc)) jfile_ierr(pjf, "not a number: %s", buf);
+  chbsets(pcb, buf);
+}
+
+/* decode lookahead number token as long long */
+static long long jfile_tnumberll(jfile_t* pjf)
+{
+  char *ts, *end, *dd; long long ll;
+  assert(pjf->tt == JTK_INT || pjf->tt == JTK_UINT);
+  ts = chbdata(&pjf->tbuf);
+  dd = *ts == '-' ? ts+1 : ts;
+  if (strspn(dd, STR_09) != strlen(dd)) jfile_ierr(pjf, "not an integer number: %s", ts);
+  errno = 0;
+  ll = strtoll(ts, &end, 10); /* yes, it may overflow */
+  if (errno) jfile_ierr(pjf, "signed integer number overflow: %s", ts);
+  assert(end && !*end);
+  return ll;
+}
+
+/* encode number into token buf as long long */
+static void jfile_tunnumberll(jfile_t* pjf, long long num)
+{
+  chbuf_t *pcb = &pjf->tbuf;
+  chbclear(pcb);
+  chbputll(num, pcb);
+}
+
+/* decode lookahead number token as unsigned long long */
+static unsigned long long jfile_tnumberull(jfile_t* pjf)
+{
+  char *ts, *end; unsigned long long ull;
+  assert(pjf->tt == JTK_UINT);
+  ts = chbdata(&pjf->tbuf);
+  if (strspn(ts, STR_09) != strlen(ts)) jfile_ierr(pjf, "not an unsigned integer number: %s", ts);
+  errno = 0;
+  ull = strtoull(ts, &end, 10); /* yes, it may overflow */
+  if (errno) jfile_ierr(pjf, "unsigned integer number overflow: %s", ts);
+  assert(end && !*end);
+  return ull;
+}
+
+/* encode number into token buf as unsigned long long */
+static void jfile_tunnumberull(jfile_t* pjf, unsigned long long num)
+{
+  chbuf_t *pcb = &pjf->tbuf;
+  chbclear(pcb);
+  chbputllu(num, pcb);
+}
+
+/* output a single char to pjf */
+static void jfile_putc(int c, jfile_t* pjf) 
+{
+  (pjf->putc)(c, pjf->pfile);
+}
+
+/* output a string to pjf */
+static void jfile_puts(const char *s, jfile_t* pjf) 
+{
+  (pjf->puts)(s, pjf->pfile);
+}
+
+/* output contents of token buf to pjf */
+static void jfile_putt(jfile_t* pjf) 
+{
+  (pjf->puts)(chbdata(&pjf->tbuf), pjf->pfile);
+}
+
+/* indent output by pjf->indent positions */
+static void jfile_putindent(jfile_t* pjf) 
+{
+  const char* pc = "          "; 
+  int i = pjf->indent / 10; 
+  while (i-- > 0) (pjf->write)(pc, 1, 10, pjf->pfile); 
+  (pjf->write)(pc, 1, pjf->indent % 10, pjf->pfile);
+}
+
+/* put separator (if given) and indent to current level */
+static void jfile_indent(jfile_t* pjf, int sep) 
+{
+  if (sep) (pjf->putc)(sep, pjf->pfile);
+  (pjf->putc)('\n', pjf->pfile); 
+  jfile_putindent(pjf);
+}
+
+/* flush pending output to destination */
+static void jfile_flush(jfile_t* pjf) 
+{ 
+  (pjf->flush)(pjf->pfile);
+}
+
+static void jfinit_ii(JFILE* pf, pii_t pii, void *dp, bool bbuf) 
+{
+  memset(pf, 0, sizeof(JFILE));
+  pf->pjf = exmalloc(sizeof(jfile_t));
+  jfile_init_ii(pf->pjf, pii, dp, bbuf);
+  pf->ownsfile = false;
+  pf->loading = true;
+  pf->state = S_AT_VALUE;
+}
+
+static void jfinit_oi(JFILE* pf, poi_t poi, void *dp, bool bbuf) 
+{
+  memset(pf, 0, sizeof(JFILE));
+  pf->pjf = exmalloc(sizeof(jfile_t));
+  jfile_init_oi(pf->pjf, poi, dp, bbuf);
+  pf->ownsfile = false;
+  pf->loading = false;
+  pf->state = S_AT_VALUE;
+}
+
+JFILE* newjfii(pii_t pii, void *dp)
+{
+  JFILE* pf;
+  assert(pii);
+  pf = exmalloc(sizeof(JFILE));
+  jfinit_ii(pf, pii, dp, true); 
+  return pf;
+}
+
+JFILE* newjfoi(poi_t poi, void *dp)
+{
+  JFILE* pf;
+  assert(poi);
+  pf = exmalloc(sizeof(JFILE));
+  jfinit_oi(pf, poi, dp, true); 
+  return pf;
+}
+
+void freejf(JFILE* pf) /* closes the file if not stdin/stdout/stderr */
+{
+  if (pf) {
+    if (!pf->loading) jfile_flush(pf->pjf);
+    if (pf->ownsfile) jfile_close(pf->pjf);
+    else jfile_fini(pf->pjf);
+    free(pf->pjf);
+    free(pf);
+  }
+}
+
+void jferror(JFILE* pf, const char* fmt, ...)
+{
+  va_list args;
+  assert(pf); assert(fmt);
+  va_start(args, fmt);
+  jfile_verr(pf->loading, pf->pjf, fmt, args);
+  va_end(args);
+}
+
+bool jfateof(JFILE* pf) /* end of file? */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_VALUE (not checked) */
+  jtoken_t t;
+  assert(pf); assert(pf->loading);
+  t = jfile_peekt(pf->pjf);
+  return (t == JTK_EOF);
+}
+
+void jfgetobrk(JFILE* pf) /* [ */
+{
+  /* legal in states: S_AT_VALUE S_AFTER_VALUE */
+  jtoken_t t;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_VALUE;
+    }
+  }
+  if (pf->state != S_AT_VALUE) jferror(pf, "no value ahead");
+  t = jfile_peekt(pf->pjf);
+  if (t != JTK_OBRK) jferror(pf, "[ expected");
+  jfile_dropt(pf->pjf);
+  t = jfile_peekt(pf->pjf);
+  if (t == JTK_CBRK) pf->state = S_AT_CBRK;
+  else pf->state = S_AT_VALUE;
+  /* out states: S_AT_VALUE S_AT_CBRK */
+}
+
+bool jfatcbrk(JFILE* pf)  /* ...]? */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_VALUE S_AT_CBRK */
+  jtoken_t t;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_CBRK) {
+      pf->state = S_AT_CBRK;
+    } else if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_VALUE;
+    }
+  }
+  if (pf->state == S_AT_CBRK) return true;
+  if (pf->state == S_AT_VALUE) return false;
+  if (pf->state == S_AFTER_VALUE) jferror(pf, ", or ] expected");
+  jferror(pf, "] or value expected");
+  return false; 
+  /* out states: S_AT_VALUE S_AT_CBRK */
+}
+
+void jfgetcbrk(JFILE* pf) /* ] */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_CBRK */
+  jtoken_t t;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_CBRK) {
+      pf->state = S_AT_CBRK;
+    }
+  }
+  if (pf->state != S_AT_CBRK) jferror(pf, "] expected");
+  t = jfile_peekt(pf->pjf);
+  assert(t == JTK_CBRK);
+  jfile_dropt(pf->pjf);
+  pf->state = S_AFTER_VALUE;
+  /* out states: S_AFTER_VALUE */
+}
+
+void jfgetobrc(JFILE* pf) /* { */
+{
+  /* legal in states: S_AT_VALUE S_AFTER_VALUE */
+  jtoken_t t;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_VALUE;
+    }
+  }
+  if (pf->state != S_AT_VALUE) jferror(pf, "no value ahead");
+  t = jfile_peekt(pf->pjf);
+  if (t != JTK_OBRC) jferror(pf, "{ expected");
+  jfile_dropt(pf->pjf);
+  t = jfile_peekt(pf->pjf);
+  if (t == JTK_CBRC) pf->state = S_AT_CBRC;
+  else pf->state = S_AT_KEY;
+  /* out states: S_AT_KEY S_AT_CBRK */
+}
+
+bool jfatcbrc(JFILE* pf)  /* ...]? */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_KEY S_AT_CBRC */
+  jtoken_t t;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_CBRC) {
+      pf->state = S_AT_CBRC;
+    } else if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_KEY;
+    }
+  }
+  if (pf->state == S_AT_CBRC) return true;
+  if (pf->state == S_AT_KEY) return false;
+  if (pf->state == S_AFTER_VALUE) jferror(pf, ", or } expected");
+  jferror(pf, "} or key-value pair expected");
+  return false; 
+  /* out states: S_AT_KEY S_AT_CBRC */
+}
+
+char* jfgetkey(JFILE* pf, chbuf_t* pcb) /* "key": */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_KEY */
+  jtoken_t t; char *key;
+  assert(pf); assert(pcb);
+  assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_KEY;
+    }
+  }
+  if (pf->state != S_AT_KEY) jferror(pf, "key-value pair expected");
+  t = jfile_peekt(pf->pjf);
+  if (t != JTK_STRING) jferror(pf, "key-value pair expected");
+  key = jfile_tstring(pf->pjf, pcb);
+  jfile_dropt(pf->pjf);
+  t = jfile_peekt(pf->pjf);  
+  if (t != JTK_COLON) jferror(pf, "colon expected");
+  jfile_dropt(pf->pjf);
+  pf->state = S_AT_VALUE;
+  return key;
+  /* out states: S_AT_VALUE */
+}
+
+void jfgetcbrc(JFILE* pf) /* } */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_CBRC */
+  jtoken_t t;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_CBRC) {
+      pf->state = S_AT_CBRC;
+    }
+  }
+  if (pf->state != S_AT_CBRC) jferror(pf, "} expected");
+  t = jfile_peekt(pf->pjf);
+  assert(t == JTK_CBRC);
+  jfile_dropt(pf->pjf);
+  pf->state = S_AFTER_VALUE;
+  /* out states: S_AFTER_VALUE */
+}
+
+jvtype_t jfpeek(JFILE* pf) /* type of value ahead */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_VALUE */
+  jtoken_t t;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_VALUE;
+    }
+  }
+  if (pf->state != S_AT_VALUE) jferror(pf, "no value ahead");
+  t = jfile_peekt(pf->pjf);
+  if (t == JTK_OBRK) return JVT_ARR;
+  if (t == JTK_OBRC) return JVT_OBJ;
+  if (t == JTK_NULL) return JVT_NULL;
+  if (t == JTK_TRUE || t == JTK_FALSE) return JVT_BOOL;
+  if (t == JTK_INT) return JVT_INT;
+  if (t == JTK_UINT) return JVT_UINT;
+  if (t == JTK_FLOAT) return JVT_FLOAT;
+  if (t == JTK_STRING) return JVT_STR;
+  if (t == JTK_OBRC) return JVT_OBJ;
+  jferror(pf, "no value ahead");
+  return (jvtype_t)-1;
+  /* out states: S_AT_VALUE */
+}
+
+void jfgetnull(JFILE* pf) /* null */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_VALUE */
+  jtoken_t t;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_VALUE;
+    }
+  }
+  if (pf->state != S_AT_VALUE) jferror(pf, "no value ahead");
+  t = jfile_peekt(pf->pjf);
+  if (t != JTK_NULL) jferror(pf, "null expected");
+  jfile_dropt(pf->pjf);
+  pf->state = S_AFTER_VALUE;
+  /* out states: S_AFTER_VALUE */
+}
+
+bool jfgetbool(JFILE* pf) /* true/false */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_VALUE */
+  jtoken_t t;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_VALUE;
+    }
+  }
+  if (pf->state != S_AT_VALUE) jferror(pf, "no value ahead");
+  t = jfile_peekt(pf->pjf);
+  if (t != JTK_TRUE && t != JTK_FALSE) jferror(pf, "true/false expected");
+  jfile_dropt(pf->pjf);
+  pf->state = S_AFTER_VALUE;
+  return t == JTK_TRUE;
+  /* out states: S_AFTER_VALUE */
+}
+
+double jfgetnumd(JFILE* pf) /* num as double */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_VALUE */
+  jtoken_t t; double d;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_VALUE;
+    }
+  }
+  if (pf->state != S_AT_VALUE) jferror(pf, "no value ahead");
+  t = jfile_peekt(pf->pjf);
+  if (t < JTK_INT || t > JTK_FLOAT) jferror(pf, "number expected");
+  d = jfile_tnumberd(pf->pjf);
+  jfile_dropt(pf->pjf);
+  pf->state = S_AFTER_VALUE;
+  return d;
+  /* out states: S_AFTER_VALUE */
+}
+
+long long jfgetnumll(JFILE* pf) /* num as long long */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_VALUE */
+  jtoken_t t; long long ll;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_VALUE;
+    }
+  }
+  if (pf->state != S_AT_VALUE) jferror(pf, "no value ahead");
+  t = jfile_peekt(pf->pjf);
+  if (t != JTK_INT && t != JTK_UINT) jferror(pf, "integer number expected");
+  ll = jfile_tnumberll(pf->pjf);
+  jfile_dropt(pf->pjf);
+  pf->state = S_AFTER_VALUE;
+  return ll;
+  /* out states: S_AFTER_VALUE */
+}
+
+unsigned long long jfgetnumull(JFILE* pf) /* num as unsigned long long */
+{
+  /* legal in states: S_AFTER_VALUE S_AT_VALUE */
+  jtoken_t t; unsigned long long ull;
+  assert(pf); assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_VALUE;
+    }
+  }
+  if (pf->state != S_AT_VALUE) jferror(pf, "no value ahead");
+  t = jfile_peekt(pf->pjf);
+  if (t != JTK_UINT) jferror(pf, "unsigned integer expected");
+  ull = jfile_tnumberull(pf->pjf);
+  jfile_dropt(pf->pjf);
+  pf->state = S_AFTER_VALUE;
+  return ull;
+  /* out states: S_AFTER_VALUE */
+}
+
+char* jfgetstr(JFILE* pf, chbuf_t* pcb)
+{
+  /* legal in states: S_AFTER_VALUE S_AT_VALUE */
+  jtoken_t t; char *s;
+  assert(pf); assert(pcb);
+  assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_VALUE;
+    }
+  }
+  if (pf->state != S_AT_VALUE) jferror(pf, "no value ahead");
+  t = jfile_peekt(pf->pjf);
+  if (t != JTK_STRING) jferror(pf, "string expected");
+  s = jfile_tstring(pf->pjf, pcb);
+  jfile_dropt(pf->pjf);
+  pf->state = S_AFTER_VALUE;
+  return s;
+  /* out states: S_AFTER_VALUE */
+}
+
+void jfputobrk(JFILE* pf) /* [ */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  pjf = pf->pjf;
+  if (pf->state == S_AT_OBRK) jfile_indent(pjf, 0);
+  else if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, ',');
+  jfile_putc('[', pjf);
+  ++(pjf->indent);
+  pf->state = S_AT_OBRK;
+}
+
+void jfputcbrk(JFILE* pf) /* ] */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  pjf = pf->pjf;
+  --(pjf->indent);
+  if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, 0);
+  jfile_putc(']', pjf);
+  pf->state = S_AFTER_VALUE;
+}
+
+void jfputobrc(JFILE* pf) /* { */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  pjf = pf->pjf;
+  if (pf->state == S_AT_OBRK) jfile_indent(pjf, 0);
+  else if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, ',');
+  jfile_putc('{', pjf);
+  ++(pjf->indent);
+  pf->state = S_AT_OBRC;
+}
+
+void jfputkeyn(JFILE* pf, const char *key, size_t n) /* "key": */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  assert(key);
+  pjf = pf->pjf;
+  if (pf->state == S_AT_OBRC) jfile_indent(pjf, 0); 
+  else if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, ',');
+  jfile_tunstring(pjf, key, n);
+  jfile_putt(pjf);
+  jfile_putc(':', pjf);
+  jfile_putc(' ', pjf);
+  pf->state = S_AT_VALUE;
+}
+
+void jfputkey(JFILE* pf, const char *key) /* "key": */
+{
+  assert(pf); assert(key);
+  jfputkeyn(pf, key, strlen(key));
+}
+
+void jfputcbrc(JFILE* pf) /* } */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  pjf = pf->pjf;
+  --(pjf->indent);
+  if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, 0);
+  jfile_putc('}', pjf);
+  pf->state = S_AFTER_VALUE;
+}
+
+void jfputnull(JFILE* pf) /* null */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  pjf = pf->pjf;
+  if (pf->state == S_AT_OBRK) jfile_indent(pjf, 0); 
+  else if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, ',');
+  jfile_puts("null", pjf);
+  pf->state = S_AFTER_VALUE;
+}
+
+void jfputbool(JFILE* pf, bool b) /* true/false */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  pjf = pf->pjf;
+  if (pf->state == S_AT_OBRK) jfile_indent(pjf, 0); 
+  else if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, ',');
+  jfile_puts(b ? "true" : "false", pjf);
+  pf->state = S_AFTER_VALUE;
+}
+
+void jfputnumd(JFILE* pf, double num) /* num as double */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  pjf = pf->pjf;
+  if (pf->state == S_AT_OBRK) jfile_indent(pjf, 0); 
+  else if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, ',');
+  jfile_tunnumberd(pjf, num);
+  jfile_putt(pjf);
+  pf->state = S_AFTER_VALUE;
+}
+
+void jfputnumll(JFILE* pf, long long num) /* num as long long */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  pjf = pf->pjf;
+  if (pf->state == S_AT_OBRK) jfile_indent(pjf, 0); 
+  else if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, ',');
+  jfile_tunnumberll(pjf, num);
+  jfile_putt(pjf);
+  pf->state = S_AFTER_VALUE;
+}
+
+void jfputnumull(JFILE* pf, unsigned long long num) /* num as unsigned long long */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  pjf = pf->pjf;
+  if (pf->state == S_AT_OBRK) jfile_indent(pjf, 0); 
+  else if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, ',');
+  jfile_tunnumberull(pjf, num);
+  jfile_putt(pjf);
+  pf->state = S_AFTER_VALUE;
+}
+
+void jfputstrn(JFILE* pf, const char *str, size_t n) /* "str" */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  assert(str);
+  pjf = pf->pjf;
+  if (pf->state == S_AT_OBRK) jfile_indent(pjf, 0); 
+  else if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, ',');
+  jfile_tunstring(pjf, str, n);
+  jfile_putt(pjf);
+  pf->state = S_AFTER_VALUE;
+}
+
+void jfputstr(JFILE* pf, const char *str) /* "str" */
+{
+  assert(pf); assert(str);
+  jfputstrn(pf, str, strlen(str));
+}
+
+void jfflush(JFILE* pf)
+{
+  assert(pf);
+  assert(!pf->loading);
+  jfile_flush(pf->pjf);  
+}
 
 
 

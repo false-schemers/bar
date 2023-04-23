@@ -50,6 +50,7 @@ extern char *strprf(const char *str, const char *prefix);
 extern char *strsuf(const char *str, const char *suffix);
 extern bool streql(const char *s1, const char *s2);
 extern bool strieql(const char *s1, const char *s2);
+extern size_t strcnt(const char *s, int c);
 extern void memswap(void *mem1, void *mem2, size_t sz);
 extern unsigned char *utf8(unsigned long c, unsigned char *s);
 extern unsigned long unutf8(unsigned char **ps);
@@ -154,6 +155,7 @@ typedef buf_t chbuf_t;
 #define freechb(pb) (freebuf(pb))
 #define chblen(pb) (buflen(pb))
 #define chbclear(pb) (bufclear(pb))
+#define chbempty(pb) (buflen(pb) == 0)
 extern void chbputc(int c, chbuf_t* pcb);
 #define chbputc(c, pb) (*(char*)bufnewbk(pb) = (char)(c))
 extern void chbput(const char *s, size_t n, chbuf_t* pcb);
@@ -275,4 +277,67 @@ extern poi_t cbuf_poi; /* data ptr is chbuf_t* (see above) */
 #define oiput(poi, b, n, dp) ((poi->write)(b, 1, n, dp))
 #define oiflush(poi, dp) ((poi->flush)(dp))
 #define oictl(poi, c, a, dp) ((poi->ctl)(c, a, dp))
+
+/* json i/o "file" */
+typedef struct JFILE_tag {
+  /* base (internal) */
+  struct jfile_tag* pjf;
+  bool ownsfile;
+  /* context */
+  bool loading;
+  /* parser/unparser FSA state */
+  enum {
+    S_AT_OBRK, S_AT_OBRC, 
+    S_AT_KEY, S_AT_VALUE, 
+    S_AFTER_VALUE,
+    S_AT_CBRK, S_AT_CBRC 
+  } state;
+} JFILE;
+
+/* constructors/destructors */
+extern JFILE* newjfii(pii_t pii, void *dp);
+extern JFILE* newjfoi(poi_t poi, void *dp);
+extern void freejf(JFILE* pf);
+extern void jferror(JFILE* pf, const char* fmt, ...);
+
+/* type of json value */
+typedef enum { 
+  JVT_ARR, JVT_OBJ, 
+  JVT_NULL, JVT_BOOL, 
+  JVT_INT, JVT_UINT, 
+  JVT_FLOAT, JVT_STR 
+} jvtype_t;
+
+/* input operations (ignore whitespace between tokens) */
+extern bool jfateof(JFILE* pf); /* end of file? */
+extern void jfgetobrk(JFILE* pf); /* [ */
+extern bool jfatcbrk(JFILE* pf);  /* ...]? */
+extern void jfgetcbrk(JFILE* pf); /* ] */
+extern void jfgetobrc(JFILE* pf); /* { */
+extern char* jfgetkey(JFILE* pf, chbuf_t* pcb); /* "key": */
+extern bool jfatcbrc(JFILE* pf);  /* ...}? */
+extern void jfgetcbrc(JFILE* pf); /* } */
+extern jvtype_t jfpeek(JFILE* pf); /* type of value ahead */
+extern void jfgetnull(JFILE* pf); /* null */
+extern bool jfgetbool(JFILE* pf); /* true/false */
+extern long long jfgetnumll(JFILE* pf); /* num as long long */
+extern unsigned long long jfgetnumull(JFILE* pf); /* num as unsigned long long */
+extern double jfgetnumd(JFILE* pf); /* num as double */
+extern char* jfgetstr(JFILE* pf, chbuf_t* pcb);
+
+/* output operations */
+extern void jfputobrk(JFILE* pf); /* [ */
+extern void jfputcbrk(JFILE* pf); /* ] */
+extern void jfputobrc(JFILE* pf); /* { */
+extern void jfputkey(JFILE* pf, const char *key); /* "key": */
+extern void jfputkeyn(JFILE* pf, const char *key, size_t n); /* "key": */
+extern void jfputcbrc(JFILE* pf); /* } */
+extern void jfputnull(JFILE* pf); /* null */
+extern void jfputbool(JFILE* pf, bool b); /* true/false */
+extern void jfputnumll(JFILE* pf, long long num); /* num as long long */
+extern void jfputnumull(JFILE* pf, unsigned long long num); /* num as unsigned long long */
+extern void jfputnumd(JFILE* pf, double num); /* num as double */
+extern void jfputstr(JFILE* pf, const char *str); /* "str" */
+extern void jfputstrn(JFILE* pf, const char *str, size_t n); /* "str" */
+extern void jfflush(JFILE* pf);
 
