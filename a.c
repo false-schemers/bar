@@ -12,9 +12,10 @@
 #include <assert.h>
 #include <wchar.h>
 #include "b.h"
+#include "a.h"
 
 
-/* wcpl globals */
+/* bar globals */
 const char * g_ar = NULL;
 
 void init_archiver(void)
@@ -24,6 +25,42 @@ void init_archiver(void)
 void fini_archiver(void)
 {
 }
+
+/* file/directory entry */
+
+fdent_t* fdeinit(fdent_t* mem)
+{
+  memset(mem, 0, sizeof(fdent_t));
+  fdebinit(&mem->files);
+  dsinit(&mem->name);
+  dsinit(&mem->integrity_algorithm);
+  dsinit(&mem->integrity_hash);
+  dsbinit(&mem->integrity_blocks);
+  return mem;
+}
+
+void fdefini(fdent_t* pe)
+{
+  fdebfini(&pe->files);
+  dsfini(&pe->name);
+  dsfini(&pe->integrity_algorithm);
+  dsfini(&pe->integrity_hash);
+  dsbfini(&pe->integrity_blocks);
+}
+
+fdebuf_t* fdebinit(fdebuf_t* mem)
+{
+  bufinit(mem, sizeof(fdent_t));
+  return mem;
+}
+
+void fdebfini(fdebuf_t* pb)
+{
+  size_t i;
+  for (i = 0; i < buflen(pb); ++i) fdefini(bufref(pb, i));
+  buffini(pb); 
+}
+
 
 uint32_t unpack_uint32_le(uint8_t buf[4])
 {
@@ -45,47 +82,46 @@ uint32_t read_header(FILE *fp, chbuf_t *pcb)
   return off;
 }
 
-void parse_header_files(JFILE *jfp, const char *base)
+void parse_header_files(JFILE *jfp, const char *base, fdebuf_t *pfdb)
 {
   chbuf_t kcb = mkchb(), ncb = mkchb();
   jfgetobrc(jfp);
   while (!jfatcbrc(jfp)) {
-    unsigned long long off = 0, size = 0;
-    bool executable = false, unpacked = false;
-    bool isdir = false;
+    fdent_t *pfde = fdebnewbk(pfdb);
     jfgetkey(jfp, &ncb); /* name: */
     fprintf(stdout, "%s/%s\n", base, chbdata(&ncb));
+    pfde->name = exstrdup(chbdata(&ncb));
     jfgetobrc(jfp);
     while (!jfatcbrc(jfp)) {
       char *key = jfgetkey(jfp, &kcb);
       if (streql(key, "files")) {
         char *nbase = chbsetf(&kcb, "%s/%s", base, chbdata(&ncb));
-        fprintf(stdout, "  unpacked = %d\n", (int)unpacked);
-        parse_header_files(jfp, nbase);
-        isdir = true;
+        pfde->isdir = true;
+        parse_header_files(jfp, nbase, &pfde->files);
       } else if (streql(key, "offset")) { 
         char *soff = jfgetstr(jfp, &kcb);
-        off = strtoull(soff, NULL, 10);
+        pfde->offset = strtoull(soff, NULL, 10);
       } else if (streql(key, "size")) { 
-        size = jfgetnumull(jfp);
+        pfde->size = jfgetnumull(jfp);
       } else if (streql(key, "executable")) { 
-        executable = jfgetbool(jfp);
+        pfde->executable = jfgetbool(jfp);
       } else if (streql(key, "unpacked")) { 
-        unpacked = jfgetbool(jfp);
+        pfde->unpacked = jfgetbool(jfp);
       } else if (streql(key, "integrity")) {
         jfgetobrc(jfp);
         while (!jfatcbrc(jfp)) {
           key = jfgetkey(jfp, &kcb);
           if (streql(key, "algorithm")) {
-            char *alg = jfgetstr(jfp, &kcb);
+            pfde->integrity_algorithm = exstrdup(jfgetstr(jfp, &kcb));
           } else if (streql(key, "hash")) {
-            char *hash = jfgetstr(jfp, &kcb);
+            pfde->integrity_hash = exstrdup(jfgetstr(jfp, &kcb));
           } else if (streql(key, "blockSize")) {
-            unsigned long long bsz = jfgetnumull(jfp); 
+            pfde->integrity_block_size = (unsigned long)jfgetnumull(jfp); 
           } else if (streql(key, "blocks")) {
             jfgetobrk(jfp);
             while (!jfatcbrk(jfp)) {
               char *block = jfgetstr(jfp, &kcb);
+              dsbpushbk(&pfde->integrity_blocks, &block);
             }
             jfgetcbrk(jfp);
           }
@@ -95,11 +131,13 @@ void parse_header_files(JFILE *jfp, const char *base)
         exprintf("%s: invalid entry: %s", g_ar, chbdata(&kcb));
       }
     }
-    if (!isdir) {
-      fprintf(stdout, "  offset = 0x%.8lx (%ld)\n", (unsigned long)off, (unsigned long)off);
-      fprintf(stdout, "  size = 0x%.8lx (%ld)\n", (unsigned long)size, (unsigned long)size);
-      fprintf(stdout, "  executable = %d\n", (int)executable);
-      fprintf(stdout, "  unpacked = %d\n", (int)unpacked);
+    if (!pfde->isdir) {
+      fprintf(stdout, "  offset = 0x%.8lx (%ld)\n", 
+        (unsigned long)pfde->offset, (unsigned long)pfde->offset);
+      fprintf(stdout, "  size = 0x%.8lx (%ld)\n", 
+        (unsigned long)pfde->size, (unsigned long)pfde->size);
+      fprintf(stdout, "  executable = %d\n", (int)pfde->executable);
+      fprintf(stdout, "  unpacked = %d\n", (int)pfde->unpacked);
     }
     jfgetcbrc(jfp);
   }
@@ -107,14 +145,14 @@ void parse_header_files(JFILE *jfp, const char *base)
   chbfini(&kcb), chbfini(&ncb);
 }
 
-void parse_header(chbuf_t *pcb)
+void parse_header(chbuf_t *pcb, fdebuf_t *pfdb)
 {
   char *pc = pcb->buf; JFILE *jfp = newjfii(strptr_pii, &pc);
   chbuf_t kcb = mkchb(); 
   jfgetobrc(jfp);
   jfgetkey(jfp, &kcb); /* "files": */
   if (!streql(chbdata(&kcb), "files")) exprintf("%s: invalid file list", g_ar);
-  parse_header_files(jfp, "");  
+  parse_header_files(jfp, "", pfdb);
   jfgetcbrc(jfp);
   freejf(jfp);
   chbfini(&kcb);
@@ -128,12 +166,13 @@ void pack(const char *dir, const char *ar)
 void list(const char *ar)
 {
   FILE *fp; uint32_t off; chbuf_t cb = mkchb();
+  fdebuf_t fdeb; fdebinit(&fdeb);
   g_ar = ar;
   if (!(fp = fopen(ar, "rb"))) exprintf("can't open archive file %s:", ar);
   off = read_header(fp, &cb);
   verbosef("header = \'%s\'\n", chbdata(&cb));
-  parse_header(&cb);
-  chbfini(&cb);
+  parse_header(&cb, &fdeb);
+  chbfini(&cb); fdebfini(&fdeb);
   fclose(fp);
 }
 
