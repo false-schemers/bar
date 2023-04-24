@@ -16,7 +16,14 @@
 
 
 /* bar globals */
-const char * g_ar = NULL;
+const char *g_ar = NULL;
+/* long options for 'pack' command */
+const char *g_ordering = NULL;
+const char *g_unpack = NULL;
+const char *g_unpack_dir = NULL;
+bool g_exclude_hidden = false;
+/* long options for 'list' command */
+bool g_is_pack = false;
 
 void init_archiver(void)
 {
@@ -69,14 +76,19 @@ uint32_t unpack_uint32_le(uint8_t buf[4])
 
 uint32_t read_header(FILE *fp, chbuf_t *pcb)
 {
-  uint8_t hbuf[16]; uint32_t psz, off, x, ssz;
+  uint8_t hbuf[16]; uint32_t psz, off, asz, ssz, x;
   if (fread(hbuf, 16, 1, fp) != 1) exprintf("%s: can't read archive header", g_ar);
   psz = unpack_uint32_le(hbuf);
   off = unpack_uint32_le(hbuf+4);  
-  x = unpack_uint32_le(hbuf+8);  
+  asz = unpack_uint32_le(hbuf+8);  
   ssz = unpack_uint32_le(hbuf+12);
-  verbosef("psz = 0x%.8x, off = 0x%.8x, x = 0x%.8x, ssz = 0x%.8x\n", psz, off, x, ssz);
-  if (psz != 4 || x > off || ssz > off) exprintf("%s: invalid archive header", g_ar);
+  verbosef("psz = 0x%.8x, off = 0x%.8x, asz = 0x%.8x, ssz = 0x%.8x\n", psz, off, asz, ssz);
+  if (ssz < 12) exprintf("%s: invalid archive header [3]", g_ar);
+  x = ssz + 4; if (x % 4 > 0) x += 4 - (x % 4); /* align to 32 bit */
+  if (x != asz) exprintf("%s: invalid archive header [2]", g_ar);
+  x += 4;
+  if (x != off) exprintf("%s: invalid archive header [1]", g_ar); 
+  if (psz != 4) exprintf("%s: invalid archive header [0]", g_ar);
   bufresize(pcb, ssz);
   if (fread(pcb->buf, 1, ssz, fp) != ssz) exprintf("%s: invalid archive header data", g_ar);
   return off;
@@ -220,13 +232,42 @@ void parse_header(chbuf_t *pcb, fdebuf_t *pfdb)
   jfputkey(jfpo, "files");
   unparse_header_files(jfpo, pfdb);
   jfputcbrc(jfpo);
-  freejf(jfpo);
+  freejf(jfpo); fputc('\n', stdout);
   chbfini(&kcb);
 }
 
 void pack(const char *dir, const char *ar)
 {
   eusage("NYI: pack");
+}
+
+void list_fdebuf(const char *base, fdebuf_t *pfdb, FILE *pf, bool full)
+{
+  size_t i; chbuf_t cb = mkchb();
+  for (i = 0; i < fdeblen(pfdb); ++i) {
+    fdent_t *pfde = fdebref(pfdb, i);
+    if (pfde->isdir) {
+      const char *sbase;
+      if (full) {
+        fprintf(pf, "d-%c ", pfde->unpacked ? 'u' : '-');
+        fprintf(pf, "                           ");
+      }
+      if (!base) fprintf(pf, "%s/\n", pfde->name);
+      else fprintf(pf, "%s/%s/\n", base, pfde->name);
+      if (!base) sbase = pfde->name;
+      else sbase = chbsetf(&cb, "%s/%s", base, pfde->name);
+      list_fdebuf(sbase, &pfde->files, pf, full);
+    } else {
+      if (full) {
+        fprintf(pf, "-%c%c ", pfde->executable ? 'x' : '-', pfde->unpacked ? 'u' : '-');
+        if (pfde->unpacked) fprintf(pf, "              %12lu ", (unsigned long)pfde->size);
+        else fprintf(pf, "@%-12lu %12lu ", (unsigned long)pfde->offset, (unsigned long)pfde->size);
+      }
+      if (!base) fprintf(pf, "%s\n", pfde->name);
+      else fprintf(pf, "%s/%s\n", base, pfde->name);
+    }
+  }
+  chbfini(&cb);
 }
 
 void list(const char *ar)
@@ -238,6 +279,7 @@ void list(const char *ar)
   off = read_header(fp, &cb);
   verbosef("header = \'%s\'\n", chbdata(&cb));
   parse_header(&cb, &fdeb);
+  list_fdebuf(NULL, &fdeb, stdout, true);
   chbfini(&cb); fdebfini(&fdeb);
   fclose(fp);
 }
@@ -252,6 +294,22 @@ void extract(const char *ar, const char *dir)
   eusage("NYI: extract");
 }
 
+/* interpret long options */
+static void longopt(const char *longopt, int *peoptind, int argc, char **argv)
+{
+  if (streql(longopt, "ordering") && *peoptind < argc)
+    g_ordering = argv[(*peoptind)++];
+  else if (streql(longopt, "unpack") && *peoptind < argc)
+    g_unpack = argv[(*peoptind)++];
+  else if (streql(longopt, "unpack-dir") && *peoptind < argc)
+    g_unpack_dir = argv[(*peoptind)++];
+  else if (streql(longopt, "exclude-hidden"))
+    g_exclude_hidden = true;
+  else if (streql(longopt, "is-pack"))
+    g_is_pack = true;
+  else eusage("illegal option: --%s", longopt);  
+}
+
 int main(int argc, char **argv)
 {
   int opt;
@@ -264,20 +322,24 @@ int main(int argc, char **argv)
   setusage
     ("[OPTIONS] [COMMAND]\n"
      "commands are:\n"
-     "   p  dir ar  Pack dir as archive ar\n"
+     "   c  dir ar  Pack dir as archive ar\n"
      "   l  ar      List ar contents\n"
      "   ef ar f    Extract file f from archive ar\n"
      "   e  ar dir  Extract archive ar as dir\n"
+     "command-specific options are:\n"
+     "  --is-pack   List: each file in the asar is pack or unpack\n"
      "options are:\n"
      "  -w          Suppress warnings\n"
      "  -v          Increase verbosity\n"
      "  -q          Suppress logging ('quiet')\n"
+     "  -i          Same as --is-pack\n"
      "  -h          This help");
-  while ((opt = egetopt(argc, argv, "wvqh")) != EOF) {
+  while ((opt = egetopt(argc, argv, "wvq-:h")) != EOF) {
     switch (opt) {
       case 'w':  setwlevel(3); break;
       case 'v':  incverbosity(); break;
       case 'q':  incquietness(); break;
+      case '-':  longopt(eoptarg, &eoptind, argc, argv); break;
       case 'h':  eusage("BAR 1.00 built on " __DATE__);
     }
   }
