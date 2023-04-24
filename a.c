@@ -154,19 +154,24 @@ void unparse_header_files(JFILE *jfp, fdebuf_t *pfdb)
     if (pfde->name) jfputkey(jfp, pfde->name);
     jfputobrc(jfp);
     if (pfde->isdir) {
+      if (pfde->unpacked) { 
+        jfputkey(jfp, "unpacked"); 
+        jfputbool(jfp, true); 
+      }
       jfputkey(jfp, "files");
       unparse_header_files(jfp, &pfde->files);
     } else {
-      jfputkey(jfp, "offset");
-      jfputstr(jfp, chbsetf(&cb, "%llu", pfde->offset)); 
       jfputkey(jfp, "size");
       jfputnumull(jfp, pfde->size);
+      if (pfde->unpacked) {
+        jfputkey(jfp, "unpacked"); 
+        jfputbool(jfp, true); 
+      } else {      
+        jfputkey(jfp, "offset");
+        jfputstr(jfp, chbsetf(&cb, "%llu", pfde->offset)); 
+      }
       if (pfde->executable) { 
         jfputkey(jfp, "executable"); 
-        jfputbool(jfp, true); 
-      }
-      if (pfde->unpacked) { 
-        jfputkey(jfp, "unpacked"); 
         jfputbool(jfp, true); 
       }
       if (pfde->integrity_algorithm) {
