@@ -1530,6 +1530,147 @@ char* getfext(const char* path)
   return (char*)(path+strlen(path));
 }
 
+/* skips leading whitespace */
+char *strtriml(const char* str)
+{
+  assert(str);
+  while (isspace(*str)) ++str;
+  return (char *)str;
+}
+
+/* zeroes out trailing whitespace */
+char *strtrimr(char* str)
+{
+  size_t i;
+  assert(str);
+  i = strlen(str);
+  while (i > 0 && str[i-1] && isspace(str[i-1]))
+    str[i-1] = 0, --i;
+  return str;
+} 
+
+/* strtrimr, then strtriml */
+char *strtrim(char* str)
+{
+  size_t i;
+  assert(str);
+  i = strlen(str);
+  while (i > 0 && str[i-1] && isspace(str[i-1]))
+    str[i-1] = 0, --i;
+  while (*str && *(unsigned char *)str <= ' ')
+    ++str;
+  return str;
+}
+
+/* normalize whitespace to single ' ', trim */
+char *strnorm(char* str)
+{
+  char *to = str, *from = str;
+  /* don't use isspace - it may fail on utf-8 */
+  for (;;) {
+    int c = *(unsigned char *)from++;
+    if (!c) { 
+      *to = 0; 
+      break; 
+    } else if (c <= ' ') {
+      /* copy space only if it separates */
+      if (to > str && *(unsigned char *)from > ' ')
+        *to++ = ' ';
+    } else {
+      *to++ = c;
+    }
+  }
+  return str;
+}
+
+/* simple shell-style pattern matcher
+ *
+ *	*	     matches zero or more of any character
+ *	?	     matches any single character
+ *	[^xxx]	matches any single character not in the set given
+ *	[!xxx]	matches any single character not in the set given
+ *	[xxx]	 matches any single character in the set given
+ *	The - character is understood to be a range indicator as in a-z
+ *	If the ] character is the first of the set it is considered
+ *	as part of the set, not the terminator.
+ */
+bool gmatch(const char *src, const char *pat)
+{
+  assert(src); assert(pat);
+  while (*src) {
+    switch (*pat) {
+      case 0: /* src is not empty, but pat is */
+        return false;
+      case '?': /* match any single char */
+        ++src; ++pat;
+        continue;
+      case '*': /* match 0 or more chars */
+        /* basic optimization: skip '*'s */
+        while (*pat == '*') ++pat;
+        /* check if something follows the '*' */
+        if (*pat == 0) return true;
+        /* try to locate tail of src that matches pat */
+        while (*src) if (gmatch(src++, pat)) return true;
+        /* no tail of src matches pat */
+        return false;
+      case '[': { /* char class */
+        int c = *src++; /* src is pos-d for the next iteration */
+        bool in = false; /* c is in the (non-inverted) class */
+        bool in_means_match = true; /* meaning of being in cc */
+        bool esc = true; /* escape state at the beginning of cc */
+        ++pat;
+        /* check for inversion of meaning */
+        if (*pat == '!' || *pat == '^') { 
+          ++pat; in_means_match = false; 
+        }
+        /* c is in if it is in at least one of the ranges */
+        while (*pat) {
+          int cfrom, cto;
+          cfrom = *pat;
+          if (esc) { /* cfrom is just a char */
+            esc = false;
+          } else { /* check for special chars */
+            if (cfrom == ']') break;
+            if (cfrom == '\\') { esc = true; continue; }
+          }
+          ++pat;
+          if (*pat == '-' && *(pat+1) != ']') { /* range spec */
+            ++pat; cto = *pat++;
+            if (cto == '\\') cto = *pat++;
+          } else { /* single char spec */
+            cto = cfrom;
+          }
+          if (c >= cfrom && c <= cto) { /* in range! */
+            in = true; break;
+          }
+        } 
+        /* see if we need to stop the matching here */
+        if (in && !in_means_match) return false;
+        if (!in && in_means_match) return false;
+        /* skip the rest of the char class */
+        while (*pat) {
+          if (esc) esc = false;
+          else if (*pat == ']') break;
+          else if (*pat == '\\') esc = true;
+          ++pat;
+        }
+        /* leave pat pointing to the char after [xxx] */
+        ++pat;
+        continue;
+      } 
+      case '\\': /* escape next pat char */
+        ++pat;
+        /* fall thru */
+      default: /* char/char match */
+        if (*src != *pat) return false;
+        ++src; ++pat;
+        continue;
+    }
+  }
+  /* src is empty: check if pat matches it */
+  while (*pat == '*') ++pat;
+  return *pat == 0;
+}
 
 
 /* warnings and -w */

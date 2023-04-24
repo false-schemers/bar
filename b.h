@@ -50,7 +50,11 @@ extern char *strprf(const char *str, const char *prefix);
 extern char *strsuf(const char *str, const char *suffix);
 extern bool streql(const char *s1, const char *s2);
 extern bool strieql(const char *s1, const char *s2);
-extern size_t strcnt(const char *s, int c);
+extern size_t strcnt(const char *s, int c); /* count c in s */
+extern char *strtriml(const char *s); /* skips leading ws */
+extern char *strtrimr(char *s); /* zeroes out trailing ws */
+extern char *strtrim(char *s); /* strtrimr, then strtriml */
+extern char *strnorm(char *s); /* normalize ws to single ' ', trim */
 extern void memswap(void *mem1, void *mem2, size_t sz);
 extern unsigned char *utf8(unsigned long c, unsigned char *s);
 extern unsigned long unutf8(unsigned char **ps);
@@ -62,6 +66,9 @@ extern bool fget8bom(FILE *fp);
 #define is8chead(c) (((c) & 0xC0) == 0xC0)
 #define is8ctail(c) (((c) & 0xC0) == 0x80)
 extern int int_cmp(const void *pi1, const void *pi2);
+
+/* simple shell-style pattern matcher (cf. fnmatch) */
+bool gmatch(const char *src, const char *pat);
 
 /* floating-point reinterpret casts and exact hex i/o */
 extern unsigned long long as_uint64(double f); /* NB: asuint64 is WCPL intrinsic */
@@ -196,7 +203,6 @@ extern wchar_t *s8ctowcb(const char *str, wchar_t rc, buf_t *pb);
 /* unicode char (unsigned long) buffers */
 extern unsigned long *s8ctoucb(const char *str, unsigned long rc, buf_t *pb);
 
-
 /* grow pcb to get to the required alignment */
 extern void binalign(chbuf_t* pcb, size_t align);
 /* lay out numbers as little-endian binary into cbuf */
@@ -230,7 +236,6 @@ extern char *getfname(const char *path);
 extern size_t spanfbase(const char* path);
 /* returns trailing file extension ("" or ".foo") */
 extern char* getfext(const char* path);
-
 
 /* simple char input abstraction */
 typedef struct ii_tag {

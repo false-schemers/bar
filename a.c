@@ -16,21 +16,44 @@
 
 
 /* bar globals */
-const char *g_ar = NULL;
-/* long options for 'pack' command */
-const char *g_ordering = NULL;
-const char *g_unpack = NULL;
-const char *g_unpack_dir = NULL;
-bool g_exclude_hidden = false;
-/* long options for 'list' command */
-bool g_is_pack = false;
+char g_cmd = 'h'; /* 't', 'x', 'c', or 'h' */
+const char *g_arfile = NULL; /* archive file name */
+const char *g_dstdir = ".";  /* destination directory */
+const char *g_exfile = NULL; /* excluded glob patterns file name */
+dsbuf_t g_expats; /* list of excluded patterns */
 
 void init_archiver(void)
 {
+  dsbinit(&g_expats);
 } 
 
 void fini_archiver(void)
 {
+  dsbfini(&g_expats);
+}
+
+void loadex(void)
+{
+  FILE *fp = fopen(g_exfile, "r");
+  chbuf_t cb = mkchb(); char *line;
+  if (!fp) exprintf("can't open excluded patterns file %s:", g_exfile);
+  while ((line = fgetlb(&cb, fp)) != NULL) {
+    line = strtrim(line);
+    if (*line == 0 || *line == '#') continue;
+    dsbpushbk(&g_expats, &line);
+  }
+  fclose(fp);
+  chbfini(&cb);
+}
+
+bool excluded(const char *fname)
+{
+  size_t i;
+  for (i = 0; i < dsblen(&g_expats); ++i) {
+    dstr_t *pds = dsbref(&g_expats, i);
+    if (gmatch(fname, *pds)) return true;
+  }
+  return false;
 }
 
 /* file/directory entry */
@@ -77,20 +100,20 @@ uint32_t unpack_uint32_le(uint8_t buf[4])
 uint32_t read_header(FILE *fp, chbuf_t *pcb)
 {
   uint8_t hbuf[16]; uint32_t psz, off, asz, ssz, x;
-  if (fread(hbuf, 16, 1, fp) != 1) exprintf("%s: can't read archive header", g_ar);
+  if (fread(hbuf, 16, 1, fp) != 1) exprintf("%s: can't read archive header", g_arfile);
   psz = unpack_uint32_le(hbuf);
   off = unpack_uint32_le(hbuf+4);  
   asz = unpack_uint32_le(hbuf+8);  
   ssz = unpack_uint32_le(hbuf+12);
   verbosef("psz = 0x%.8x, off = 0x%.8x, asz = 0x%.8x, ssz = 0x%.8x\n", psz, off, asz, ssz);
-  if (ssz < 12) exprintf("%s: invalid archive header [3]", g_ar);
+  if (ssz < 12) exprintf("%s: invalid archive header [3]", g_arfile);
   x = ssz + 4; if (x % 4 > 0) x += 4 - (x % 4); /* align to 32 bit */
-  if (x != asz) exprintf("%s: invalid archive header [2]", g_ar);
+  if (x != asz) exprintf("%s: invalid archive header [2]", g_arfile);
   x += 4;
-  if (x != off) exprintf("%s: invalid archive header [1]", g_ar); 
-  if (psz != 4) exprintf("%s: invalid archive header [0]", g_ar);
+  if (x != off) exprintf("%s: invalid archive header [1]", g_arfile); 
+  if (psz != 4) exprintf("%s: invalid archive header [0]", g_arfile);
   bufresize(pcb, ssz);
-  if (fread(pcb->buf, 1, ssz, fp) != ssz) exprintf("%s: invalid archive header data", g_ar);
+  if (fread(pcb->buf, 1, ssz, fp) != ssz) exprintf("%s: invalid archive header data", g_arfile);
   return off;
 }
 
@@ -140,7 +163,7 @@ void parse_header_files(JFILE *jfp, const char *base, fdebuf_t *pfdb)
         }
         jfgetcbrc(jfp);
       } else { 
-        exprintf("%s: invalid entry: %s", g_ar, chbdata(&kcb));
+        exprintf("%s: invalid entry: %s", g_arfile, chbdata(&kcb));
       }
     }
     if (!pfde->isdir) {
@@ -224,7 +247,7 @@ void parse_header(chbuf_t *pcb, fdebuf_t *pfdb)
   chbuf_t kcb = mkchb(); 
   jfgetobrc(jfpi);
   jfgetkey(jfpi, &kcb); /* "files": */
-  if (!streql(chbdata(&kcb), "files")) exprintf("%s: invalid file list", g_ar);
+  if (!streql(chbdata(&kcb), "files")) exprintf("%s: invalid file list", g_arfile);
   parse_header_files(jfpi, "", pfdb);
   jfgetcbrc(jfpi);
   freejf(jfpi);
@@ -234,11 +257,6 @@ void parse_header(chbuf_t *pcb, fdebuf_t *pfdb)
   jfputcbrc(jfpo);
   freejf(jfpo); fputc('\n', stdout);
   chbfini(&kcb);
-}
-
-void pack(const char *dir, const char *ar)
-{
-  eusage("NYI: pack");
 }
 
 void list_fdebuf(const char *base, fdebuf_t *pfdb, FILE *pf, bool full)
@@ -270,113 +288,111 @@ void list_fdebuf(const char *base, fdebuf_t *pfdb, FILE *pf, bool full)
   chbfini(&cb);
 }
 
-void list(const char *ar)
+void list(void)
 {
   FILE *fp; uint32_t off; chbuf_t cb = mkchb();
   fdebuf_t fdeb; fdebinit(&fdeb);
-  g_ar = ar;
-  if (!(fp = fopen(ar, "rb"))) exprintf("can't open archive file %s:", ar);
+  if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file %s:", g_arfile);
   off = read_header(fp, &cb);
   verbosef("header = \'%s\'\n", chbdata(&cb));
   parse_header(&cb, &fdeb);
-  list_fdebuf(NULL, &fdeb, stdout, true);
+  list_fdebuf(NULL, &fdeb, stdout, getverbosity() > 0);
   chbfini(&cb); fdebfini(&fdeb);
   fclose(fp);
 }
 
-void extractf(const char *ar, const char *f)
+void create(int argc, char **argv)
 {
-  eusage("NYI: extract-file");
+  eusage("NYI: create");
 }
 
-void extract(const char *ar, const char *dir)
+void extract(int argc, char **argv)
 {
   eusage("NYI: extract");
-}
-
-/* interpret long options */
-static void longopt(const char *longopt, int *peoptind, int argc, char **argv)
-{
-  if (streql(longopt, "ordering") && *peoptind < argc)
-    g_ordering = argv[(*peoptind)++];
-  else if (streql(longopt, "unpack") && *peoptind < argc)
-    g_unpack = argv[(*peoptind)++];
-  else if (streql(longopt, "unpack-dir") && *peoptind < argc)
-    g_unpack_dir = argv[(*peoptind)++];
-  else if (streql(longopt, "exclude-hidden"))
-    g_exclude_hidden = true;
-  else if (streql(longopt, "is-pack"))
-    g_is_pack = true;
-  else eusage("illegal option: --%s", longopt);  
 }
 
 int main(int argc, char **argv)
 {
   int opt;
-  const char *cmd = NULL;
-  const char *dir = NULL;
-  const char *ar  = NULL;
-  const char *f   = NULL;
 
   setprogname(argv[0]);
   setusage
-    ("[OPTIONS] [COMMAND]\n"
-     "commands are:\n"
-     "   c  dir ar  Pack dir as archive ar\n"
-     "   l  ar      List ar contents\n"
-     "   ef ar f    Extract file f from archive ar\n"
-     "   e  ar dir  Extract archive ar as dir\n"
-     "command-specific options are:\n"
-     "  --is-pack   List: each file in the asar is pack or unpack\n"
-     "options are:\n"
-     "  -w          Suppress warnings\n"
-     "  -v          Increase verbosity\n"
-     "  -q          Suppress logging ('quiet')\n"
-     "  -i          Same as --is-pack\n"
-     "  -h          This help");
-  while ((opt = egetopt(argc, argv, "wvq-:h")) != EOF) {
+    ("[OPTION]... [FILE]...\n"
+     "The archiver works with .asar (json header) and .bar (bson header) archives.\n"
+     "\n"
+     "Examples:\n"
+     "  bar -cf archive.bar foo bar  # Create archive.bar from files foo and bar\n"
+     "  bar -tvf archive.bar         # List all files in archive.bar verbosely\n"
+     "  bar -xf archive.bar          # Extract all files from archive.bar\n"
+     "\n"
+     "Main operation mode:\n"
+     "  -c, --create                 Create a new archive\n"
+     "  -t, --list                   List the contents of an archive\n"
+     "  -x, --extract                Extract files from an archive\n"
+     "\n"
+     "Operation modifiers:\n"
+     "  -f, --file=FILE              Use archive FILE\n"
+     "  -C, --directory=DIR          Use directory DIR for extracted files\n"
+     "  -X, --exclude-from=FILE      Exclude files via globbing patterns in FILE\n"
+     "\n"
+     "Informative output:\n"
+     "  -v, --verbose                Increase output verbosity\n"
+     "  -q, --quiet                  Suppress logging\n"
+     "  -h, --help                   Print this help, then exit\n");
+     
+  while ((opt = egetopt(argc, argv, "ctxf:X:C:wvqh-:")) != EOF) {
     switch (opt) {
-      case 'w':  setwlevel(3); break;
-      case 'v':  incverbosity(); break;
-      case 'q':  incquietness(); break;
-      case '-':  longopt(eoptarg, &eoptind, argc, argv); break;
-      case 'h':  eusage("BAR 1.00 built on " __DATE__);
+      case 'c': g_cmd = 'c'; break;
+      case 't': g_cmd = 't'; break;
+      case 'x': g_cmd = 'x'; break;
+      case 'f': g_arfile = eoptarg; break;
+      case 'C': g_dstdir = eoptarg; break;
+      case 'X': g_exfile = eoptarg; break;
+      case 'w': setwlevel(3); break;
+      case 'v': incverbosity(); break;
+      case 'q': incquietness(); break;
+      case 'h': g_cmd = 'h'; break;
+      case '-': {
+        const char *arg;
+        if (streql(eoptarg, "create")) g_cmd = 'c';
+        else if (streql(eoptarg, "list")) g_cmd = 't';
+        else if (streql(eoptarg, "extract")) g_cmd = 'x';
+        else if ((arg = strprf(eoptarg, "file=")) != NULL) g_arfile = arg;
+        else if ((arg = strprf(eoptarg, "directory=")) != NULL) g_dstdir = arg;
+        else if ((arg = strprf(eoptarg, "exclude-from=")) != NULL) g_exfile = arg;
+        else if (streql(eoptarg, "verbose")) incverbosity();
+        else if (streql(eoptarg, "quiet")) incquietness();
+        else if (streql(eoptarg, "help")) g_cmd = 'h';
+        else eusage("illegal option: --%s", eoptarg);  
+      } break;
     }
   }
 
   init_archiver();
-
-  if (eoptind == argc) eusage("command argument is missing");
-  cmd = argv[eoptind++];
-  if (streql(cmd, "p") || streql(cmd, "pack")) {
-    if (eoptind == argc) eusage("dir argument of pack command is missing");
-    dir = argv[eoptind++];
-    if (eoptind == argc) eusage("ar argument of pack command is missing");
-    ar = argv[eoptind++];
-    if (eoptind != argc) eusage("too many arguments of pack command");
-    pack(dir, ar);
-  } else if (streql(cmd, "l") || streql(cmd, "list")) { 
-    if (eoptind == argc) eusage("ar argument of list command is missing");
-    ar = argv[eoptind++];
-    if (eoptind != argc) eusage("too many arguments of list command");
-    list(ar);
-  } else if (streql(cmd, "ef") || streql(cmd, "extract-file")) { 
-    if (eoptind == argc) eusage("ar argument of extract-file command is missing");
-    ar = argv[eoptind++];
-    if (eoptind == argc) eusage("file argument of extract-file command is missing");
-    f = argv[eoptind++];
-    if (eoptind != argc) eusage("too many arguments of extract-file command");
-    extractf(ar, f);
-  } else if (streql(cmd, "e") || streql(cmd, "extract")) { 
-    if (eoptind == argc) eusage("ar argument of extract command is missing");
-    ar = argv[eoptind++];
-    if (eoptind == argc) eusage("dir argument of extract command is missing");
-    dir = argv[eoptind++];
-    if (eoptind != argc) eusage("too many arguments of extract command");
-    extract(ar, dir);
-  } else {
-    eusage("unknown command");
-  }
+  
+  switch (g_cmd) {
+    case 't': {
+      if (!g_arfile) eusage("-f FILE argument is missing");
+      if (!streql(g_dstdir, ".")) eusage("-C option is ignored in listing mode");
+      if (g_exfile) eusage("-X option is ignored in listing mode");
+      if (eoptind < argc) eusage("too many arguments for list command");
+      list();
+    } break;
+    case 'c': {
+      if (!g_arfile) eusage("-f FILE argument is missing");
+      if (!streql(g_dstdir, ".")) eusage("-C option is ignored in create mode");
+      if (g_exfile) loadex();
+      create(argc-eoptind, argv+eoptind);
+    } break;
+    case 'x': {
+      if (!g_arfile) eusage("-f FILE argument is missing");
+      if (g_exfile) loadex();
+      extract(argc-eoptind, argv+eoptind);
+    } break;
+    case 'h': {
+      eusage("BAR (Basic Archiver) 1.00 built on " __DATE__); 
+    } break;
+  }  
 
   fini_archiver();
 
