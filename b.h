@@ -237,6 +237,15 @@ extern size_t spanfbase(const char* path);
 /* returns trailing file extension ("" or ".foo") */
 extern char* getfext(const char* path);
 
+/* portable version of filesystem stat */
+typedef struct fsstat_tag {
+  bool isreg, isdir;
+  time_t atime, ctime, mtime;
+  uint64_t size;
+} fsstat_t;
+/* retrieve status of a file system object; return false on error */
+extern bool fsstat(const char *path, fsstat_t *ps);
+
 /* simple char input abstraction */
 typedef struct ii_tag {
   int (*getc)(void*);

@@ -303,7 +303,30 @@ void list(void)
 
 void create(int argc, char **argv)
 {
-  eusage("NYI: create");
+  chbuf_t hcb = mkchb(); int i;
+  fdebuf_t fdeb; fdebinit(&fdeb);
+  
+  for (i = 0; i < argc; ++i) {
+    /* NB: we don't care where file/dir arg is located */
+    char *path = argv[i]; fsstat_t st; 
+    if (fsstat(path, &st) && (st.isdir || st.isreg)) {
+      char *fname = getfname(path);
+      fdent_t *pfde = fdebnewbk(&fdeb);
+      pfde->name = exstrdup(fname);
+      pfde->isdir = st.isdir;
+      pfde->size = st.size;  
+      if (excluded(path)) {
+        pfde->unpacked = true;
+      } else {
+        //if (pfde->isdir)
+      }
+    } else {
+      exprintf("can't find file or directory: %s", path);
+    }
+  }
+  
+  list_fdebuf(NULL, &fdeb, stdout, getverbosity() > 0);
+  chbfini(&hcb); fdebfini(&fdeb);
 }
 
 void extract(int argc, char **argv)
