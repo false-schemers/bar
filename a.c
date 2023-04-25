@@ -117,7 +117,7 @@ uint32_t read_header(FILE *fp, chbuf_t *pcb)
   return off;
 }
 
-void parse_header_files(JFILE *jfp, const char *base, fdebuf_t *pfdb)
+void parse_header_files_json(JFILE *jfp, const char *base, fdebuf_t *pfdb)
 {
   chbuf_t kcb = mkchb(), ncb = mkchb();
   jfgetobrc(jfp);
@@ -132,7 +132,7 @@ void parse_header_files(JFILE *jfp, const char *base, fdebuf_t *pfdb)
       if (streql(key, "files")) {
         char *nbase = chbsetf(&kcb, "%s/%s", base, chbdata(&ncb));
         pfde->isdir = true;
-        parse_header_files(jfp, nbase, &pfde->files);
+        parse_header_files_json(jfp, nbase, &pfde->files);
       } else if (streql(key, "offset")) { 
         char *soff = jfgetstr(jfp, &kcb);
         pfde->offset = strtoull(soff, NULL, 10);
@@ -180,7 +180,7 @@ void parse_header_files(JFILE *jfp, const char *base, fdebuf_t *pfdb)
   chbfini(&kcb), chbfini(&ncb);
 }
 
-void unparse_header_files(JFILE *jfp, fdebuf_t *pfdb)
+void unparse_header_files_json(JFILE *jfp, fdebuf_t *pfdb)
 {
   size_t i; chbuf_t cb = mkchb();
   jfputobrc(jfp);
@@ -194,7 +194,7 @@ void unparse_header_files(JFILE *jfp, fdebuf_t *pfdb)
         jfputbool(jfp, true); 
       }
       jfputkey(jfp, "files");
-      unparse_header_files(jfp, &pfde->files);
+      unparse_header_files_json(jfp, &pfde->files);
     } else {
       jfputkey(jfp, "size");
       jfputnumull(jfp, pfde->size);
@@ -239,6 +239,65 @@ void unparse_header_files(JFILE *jfp, fdebuf_t *pfdb)
   chbfini(&cb);  
 }
 
+void unparse_header_files_bson(BFILE *bfp, fdebuf_t *pfdb)
+{
+  size_t i; chbuf_t cb = mkchb();
+  bfputobrc(bfp);
+  for (i = 0; i < fdeblen(pfdb); ++i) {
+    fdent_t *pfde = fdebref(pfdb, i);
+    if (pfde->name) bfputkey(bfp, pfde->name);
+    bfputobrc(bfp);
+    if (pfde->isdir) {
+      if (pfde->unpacked) { 
+        bfputkey(bfp, "unpacked"); 
+        bfputbool(bfp, true); 
+      }
+      bfputkey(bfp, "files");
+      unparse_header_files_bson(bfp, &pfde->files);
+    } else {
+      bfputkey(bfp, "size");
+      bfputnumull(bfp, pfde->size);
+      if (pfde->unpacked) {
+        bfputkey(bfp, "unpacked"); 
+        bfputbool(bfp, true); 
+      } else {      
+        bfputkey(bfp, "offset");
+        bfputstr(bfp, chbsetf(&cb, "%llu", pfde->offset)); 
+      }
+      if (pfde->executable) { 
+        bfputkey(bfp, "executable"); 
+        bfputbool(bfp, true); 
+      }
+      if (pfde->integrity_algorithm) {
+        bfputkey(bfp, "integrity"); 
+        bfputobrc(bfp);
+        bfputkey(bfp, "algorithm"); 
+        bfputstr(bfp, pfde->integrity_algorithm);
+        if (pfde->integrity_hash) {
+          bfputkey(bfp, "hash"); 
+          bfputstr(bfp, pfde->integrity_hash);
+        }
+        if (pfde->integrity_block_size) {
+          size_t k;
+          bfputkey(bfp, "blockSize"); 
+          bfputnumull(bfp, pfde->integrity_block_size);
+          bfputkey(bfp, "blocks");
+          bfputobrk(bfp);
+          for (k = 0; k < dsblen(&pfde->integrity_blocks); ++k) {
+            dstr_t *pds = dsbref(&pfde->integrity_blocks, k);
+            bfputstr(bfp, *pds);
+          }
+          bfputcbrk(bfp);
+        }
+        bfputcbrc(bfp);
+      }
+    }
+    bfputcbrc(bfp);
+  }
+  bfputcbrc(bfp);
+  chbfini(&cb);  
+}
+
 void parse_header(chbuf_t *pcb, fdebuf_t *pfdb)
 {
   char *pc = pcb->buf; 
@@ -248,12 +307,12 @@ void parse_header(chbuf_t *pcb, fdebuf_t *pfdb)
   jfgetobrc(jfpi);
   jfgetkey(jfpi, &kcb); /* "files": */
   if (!streql(chbdata(&kcb), "files")) exprintf("%s: invalid file list", g_arfile);
-  parse_header_files(jfpi, "", pfdb);
+  parse_header_files_json(jfpi, "", pfdb);
   jfgetcbrc(jfpi);
   freejf(jfpi);
   jfputobrc(jfpo);
   jfputkey(jfpo, "files");
-  unparse_header_files(jfpo, pfdb);
+  unparse_header_files_json(jfpo, pfdb);
   jfputcbrc(jfpo);
   freejf(jfpo); fputc('\n', stdout);
   chbfini(&kcb);
@@ -337,19 +396,130 @@ void addfde(const char *path, fdebuf_t *pfdeb)
 
 void create(int argc, char **argv)
 {
+  FILE *fp; JFILE *jfp; BFILE *bfp; fdebuf_t fdeb;
   chbuf_t hcb = mkchb(); int i;
-  fdebuf_t fdeb; fdebinit(&fdeb);
+  if (!(fp = fopen(g_arfile, "wb"))) exprintf("can't open archive file %s:", g_arfile);
+  fdebinit(&fdeb);
   for (i = 0; i < argc; ++i) {
     /* NB: we don't care where file/dir arg is located */
     addfde(argv[i], &fdeb);
   }
   list_fdebuf(NULL, &fdeb, stdout, getverbosity() > 0);
+  jfp = newjfoi(FILE_poi, stdout);
+  unparse_header_files_json(jfp, &fdeb);
+  freejf(jfp);
+  fputc('\n', stdout);
+  bfp = newbfoi(FILE_poi, fp);
+  unparse_header_files_bson(bfp, &fdeb);
+  freebf(bfp);
+  fclose(fp);
   chbfini(&hcb); fdebfini(&fdeb);
 }
 
 void extract(int argc, char **argv)
 {
-  eusage("NYI: extract");
+  FILE *fp; JFILE *jfp; BFILE *bfp;
+  if (!(fp = fopen(g_arfile, "wb"))) exprintf("can't open archive file %s:", g_arfile);
+  jfp = newjfoi(FILE_poi, stdout);
+  jfputobrc(jfp);
+    jfputkey(jfp, "tags");
+      jfputobrk(jfp);
+      jfputcbrk(jfp);
+    jfputkey(jfp, "tz");
+      jfputnumll(jfp, -25200);
+    jfputkey(jfp, "days");
+      jfputobrk(jfp);
+        jfputnumll(jfp, 1);
+        jfputnumll(jfp, 1);
+        jfputnumll(jfp, 2);
+        jfputnumll(jfp, 1);
+      jfputcbrk(jfp);
+    jfputkey(jfp, "coord");
+      jfputobrk(jfp);
+        jfputnumd(jfp, -90.0715);
+        jfputnumd(jfp, 29.9510);
+      jfputcbrk(jfp);
+    jfputkey(jfp, "data");
+      jfputobrk(jfp);
+        jfputobrc(jfp);
+          jfputkey(jfp, "name");
+            jfputstr(jfp, "ox03");
+          jfputkey(jfp, "staff");
+            jfputbool(jfp, true);
+        jfputcbrc(jfp);
+        jfputobrc(jfp);
+          jfputkey(jfp, "name");
+            jfputnull(jfp);
+          jfputkey(jfp, "staff");
+            jfputbool(jfp, false);
+          jfputkey(jfp, "extra");
+            jfputobrc(jfp);
+              jfputkey(jfp, "info");
+              jfputstr(jfp, "");
+            jfputcbrc(jfp);
+        jfputcbrc(jfp);
+        jfputobrc(jfp);
+          jfputkey(jfp, "name");
+            jfputstr(jfp, "ox03");
+          jfputkey(jfp, "staff");
+            jfputbool(jfp, true);
+        jfputcbrc(jfp);
+        jfputobrc(jfp);
+        jfputcbrc(jfp);
+      jfputcbrk(jfp);
+  jfputcbrc(jfp);
+  freejf(jfp);
+  fputc('\n', stdout);
+  bfp = newbfoi(FILE_poi, fp);
+  bfputobrc(bfp);
+    bfputkey(bfp, "tags");
+      bfputobrk(bfp);
+      bfputcbrk(bfp);
+    bfputkey(bfp, "tz");
+      bfputnum(bfp, -25200);
+    bfputkey(bfp, "days");
+      bfputobrk(bfp);
+        bfputnum(bfp, 1);
+        bfputnum(bfp, 1);
+        bfputnum(bfp, 2);
+        bfputnum(bfp, 1);
+      bfputcbrk(bfp);
+    bfputkey(bfp, "coord");
+      bfputobrk(bfp);
+        bfputnumd(bfp, -90.0715);
+        bfputnumd(bfp, 29.9510);
+      bfputcbrk(bfp);
+    bfputkey(bfp, "data");
+      bfputobrk(bfp);
+        bfputobrc(bfp);
+          bfputkey(bfp, "name");
+            bfputstr(bfp, "ox03");
+          bfputkey(bfp, "staff");
+            bfputbool(bfp, true);
+        bfputcbrc(bfp);
+        bfputobrc(bfp);
+          bfputkey(bfp, "name");
+            bfputnull(bfp);
+          bfputkey(bfp, "staff");
+            bfputbool(bfp, false);
+          bfputkey(bfp, "extra");
+            bfputobrc(bfp);
+              bfputkey(bfp, "info");
+              bfputstr(bfp, "");
+            bfputcbrc(bfp);
+        bfputcbrc(bfp);
+        bfputobrc(bfp);
+          bfputkey(bfp, "name");
+            bfputstr(bfp, "ox03");
+          bfputkey(bfp, "staff");
+            bfputbool(bfp, true);
+        bfputcbrc(bfp);
+        bfputobrc(bfp);
+        bfputcbrc(bfp);
+      bfputcbrk(bfp);
+  bfputcbrc(bfp);
+  freebf(bfp);
+  fclose(fp);
 }
 
 int main(int argc, char **argv)

@@ -1150,11 +1150,24 @@ void chbputf(chbuf_t* pb, const char *fmt, ...)
 
 void chbput4le(unsigned v, chbuf_t* pb)
 {
-  chbputc(v & 0xFF, pb); v >>= 8;
-  chbputc(v & 0xFF, pb); v >>= 8;
-  chbputc(v & 0xFF, pb); v >>= 8;
-  chbputc(v & 0xFF, pb);
+  chbputc((int)(v & 0xFF), pb); v >>= 8;
+  chbputc((int)(v & 0xFF), pb); v >>= 8;
+  chbputc((int)(v & 0xFF), pb); v >>= 8;
+  chbputc((int)(v & 0xFF), pb);
 }
+
+void chbput8le(unsigned long long v, chbuf_t* pb)
+{
+  chbputc((int)(v & 0xFF), pb); v >>= 8;
+  chbputc((int)(v & 0xFF), pb); v >>= 8;
+  chbputc((int)(v & 0xFF), pb); v >>= 8;
+  chbputc((int)(v & 0xFF), pb); v >>= 8;
+  chbputc((int)(v & 0xFF), pb); v >>= 8;
+  chbputc((int)(v & 0xFF), pb); v >>= 8;
+  chbputc((int)(v & 0xFF), pb); v >>= 8;
+  chbputc((int)(v & 0xFF), pb);
+}
+
 
 void chbputtime(const char *fmt, const struct tm *tp, chbuf_t* pcb)
 {
@@ -2146,12 +2159,11 @@ static void jfile_fini(jfile_t* pjf)
 static void jfile_close(jfile_t* pjf) 
 {
   if (pjf) {
-    free(pjf->fname); 
-    chbfini(&pjf->tbuf);
     if (pjf->read == (size_t (*)(void*, size_t, size_t, void*))&fread ||
         pjf->write == (size_t (*)(const void*, size_t, size_t, void*))&fwrite) {
       fclose(pjf->pfile);
     }
+    jfile_fini(pjf);
   }
 }
 
@@ -2161,7 +2173,6 @@ static void jfile_verr(bool in, jfile_t* pjf, const char *fmt, va_list args)
   assert(fmt);
   chbclear(&pjf->tbuf);
   chbputvf(&pjf->tbuf, fmt, args);
-  pjf->tt = -2;
   /* for now, just print error and exit; todo: longjmp */
   fprintf(stderr, "JSON error: %s\naborting execution...", chbdata(&pjf->tbuf));
   exit(EXIT_FAILURE);
@@ -2175,8 +2186,7 @@ static void jfile_ierr(jfile_t* pjf, const char *fmt, ...)
   va_end(args);
 }
 
-static 
-void jfile_oerr(jfile_t* pjf, const char *fmt, ...)
+static void jfile_oerr(jfile_t* pjf, const char *fmt, ...)
 {
   va_list args;
   va_start(args, fmt);
@@ -3370,6 +3380,383 @@ void jfflush(JFILE* pf)
   assert(pf);
   assert(!pf->loading);
   jfile_flush(pf->pjf);  
+}
+
+
+/* bson i/o "file" */
+
+typedef struct bfile_tag {
+  /* i/o stream */
+  size_t (*read)(void*, size_t, size_t, void*);
+  size_t (*write)(const void*, size_t, size_t, void*);
+  int (*getc)(void*);
+  int (*ungetc)(int, void*);
+  int (*putc)(int, void*);
+  int (*puts)(const char*, void*);
+  int (*flush)(void*);
+  void* pfile;
+  dstr_t fname;
+  bool autoflush;
+  chbuf_t kbuf; /* key buf */
+  buf_t chbufs; /* stack of tmp bufs */
+  buf_t counts; /* stack of counts */
+} bfile_t;
+
+static void bfile_init_ii(bfile_t* pbf, pii_t pii, void* dp, bool bbuf)
+{
+  assert(pbf); assert(pii);
+  memset(pbf, 0, sizeof(bfile_t));
+  pbf->pfile = dp;
+  pbf->read = pii->read;
+  pbf->getc = pii->getc;
+  pbf->ungetc = pii->ungetc;
+  pbf->write = null_poi->write;
+  pbf->putc = null_poi->putc;
+  pbf->puts = null_poi->puts;
+  pbf->flush = null_poi->flush;
+  pbf->autoflush = !bbuf;
+  chbinit(&pbf->kbuf);
+  bufinit(&pbf->chbufs, sizeof(chbuf_t));
+  bufinit(&pbf->counts, sizeof(int));
+}
+
+static void bfile_init_oi(bfile_t* pbf, poi_t poi, void* dp, bool bbuf)
+{
+  assert(pbf); assert(poi);
+  memset(pbf, 0, sizeof(bfile_t));
+  pbf->pfile = dp;
+  pbf->read = null_pii->read;
+  pbf->getc = null_pii->getc;
+  pbf->ungetc = null_pii->ungetc;
+  pbf->write = poi->write;
+  pbf->putc = poi->putc;
+  pbf->puts = poi->puts;
+  pbf->flush = poi->flush;
+  pbf->autoflush = !bbuf;
+  chbinit(&pbf->kbuf);
+  bufinit(&pbf->chbufs, sizeof(chbuf_t));
+  bufinit(&pbf->counts, sizeof(int));
+}
+
+static void bfile_fini(bfile_t* pbf) 
+{
+  size_t i;
+  free(pbf->fname); 
+  chbfini(&pbf->kbuf);
+  for (i = 0; i < buflen(&pbf->chbufs); ++i) chbfini(bufref(&pbf->chbufs, i)); 
+  buffini(&pbf->chbufs);
+  buffini(&pbf->counts);
+}
+
+static void bfile_close(bfile_t* pbf) 
+{
+  if (pbf) {
+    if (pbf->read == (size_t (*)(void*, size_t, size_t, void*))&fread ||
+        pbf->write == (size_t (*)(const void*, size_t, size_t, void*))&fwrite) {
+      fclose(pbf->pfile);
+    }
+    bfile_fini(pbf);
+  }
+}
+
+static void bfile_verr(bool in, bfile_t* pbf, const char *fmt, va_list args)
+{
+  assert(pbf);
+  assert(fmt);
+  chbclear(&pbf->kbuf);
+  chbputvf(&pbf->kbuf, fmt, args);
+  /* for now, just print error and exit; todo: longjmp */
+  fprintf(stderr, "BSON error: %s\naborting execution...", chbdata(&pbf->kbuf));
+  exit(EXIT_FAILURE);
+}
+
+static void bfile_ierr(bfile_t* pbf, const char *fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+  bfile_verr(true, pbf, fmt, args);
+  va_end(args);
+}
+
+static void bfile_oerr(bfile_t* pbf, const char *fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+  bfile_verr(false, pbf, fmt, args);
+  va_end(args);
+}
+
+static void bfile_setkeyn(bfile_t* pbf, const char *key, size_t n)
+{
+  int *pcnt;
+  assert(!bufempty(&pbf->counts));
+  pcnt = bufbk(&pbf->counts);
+  assert(*pcnt % 2 == 0); /* even number of keys+elts */
+  *pcnt += 1; /* key is in tbuf */
+  chbset(&pbf->kbuf, key, n);
+}
+
+static void bfile_putkey(bfile_t* pbf, bvtype_t bvt)
+{
+  if (!bufempty(&pbf->counts)) {
+    int *pcnt = bufbk(&pbf->counts);
+    chbuf_t *pcb = bufbk(&pbf->chbufs);
+    if (*pcnt % 2 == 0) { /* no key, generate */
+      chbsetf(&pbf->kbuf, "%d", *pcnt/2);
+      *pcnt += 1; /* key is in tbuf */
+    }
+    chbputc(0, &pbf->kbuf);
+    chbputc((int)bvt, pcb);
+    chbcat(pcb, &pbf->kbuf);
+    chbclear(&pbf->kbuf); 
+  }  
+}
+
+static void bfile_opendoc(bfile_t* pbf)
+{
+  chbinit(bufnewbk(&pbf->chbufs));
+  bufnewbk(&pbf->counts);
+}
+
+static void bfile_closedoc(bfile_t* pbf)
+{
+  chbuf_t *pcb = bufpopbk(&pbf->chbufs), *pccb;
+  int *pcnt = bufpopbk(&pbf->counts);
+  assert(*pcnt % 2 == 0); /* even number of keys+elts */
+  if (bufempty(&pbf->chbufs)) { 
+    pccb = &pbf->kbuf; 
+    bufclear(pccb);
+  } else { 
+    pccb = bufbk(&pbf->chbufs);
+  }
+  chbputc(0, pcb);
+  chbput4le(chblen(pcb)+4, pccb);
+  chbcat(pccb, pcb);
+  chbfini(pcb);
+  if (bufempty(&pbf->chbufs)) {
+    pbf->write(chbdata(pccb), 1, chblen(pccb), pbf->pfile);
+    bufclear(pccb);
+  } else {
+    pcnt = bufbk(&pbf->counts);
+    assert(*pcnt % 2 == 1);
+    *pcnt += 1;
+  }
+}
+
+static void bfile_putnull(bfile_t* pbf)
+{
+  int *pcnt = bufbk(&pbf->counts);
+  assert(*pcnt % 2 == 1);
+  *pcnt += 1;
+}
+
+static void bfile_putbool(bfile_t* pbf, bool b)
+{
+  int *pcnt = bufbk(&pbf->counts);
+  chbuf_t *pcb = bufbk(&pbf->chbufs);
+  assert(*pcnt % 2 == 1);
+  chbputc(b ? 1 : 0, pcb);
+  *pcnt += 1;
+}
+
+static void bfile_puti32(bfile_t* pbf, int32_t v)
+{
+  int *pcnt = bufbk(&pbf->counts);
+  chbuf_t *pcb = bufbk(&pbf->chbufs);
+  assert(*pcnt % 2 == 1);
+  chbput4le((unsigned)v, pcb);
+  *pcnt += 1;
+}
+
+static void bfile_puti64(bfile_t* pbf, int64_t v)
+{
+  int *pcnt = bufbk(&pbf->counts);
+  chbuf_t *pcb = bufbk(&pbf->chbufs);
+  assert(*pcnt % 2 == 1);
+  chbput8le((unsigned long long)v, pcb);
+  *pcnt += 1;
+}
+
+static void bfile_putstr(bfile_t* pbf, const char *p, size_t n)
+{
+  int *pcnt = bufbk(&pbf->counts);
+  chbuf_t *pcb = bufbk(&pbf->chbufs);
+  assert(*pcnt % 2 == 1);
+  chbput4le(n+1, pcb);
+  chbput(p, n, pcb);
+  chbputc(0, pcb);
+  *pcnt += 1;
+}
+
+static void bfile_putdata(bfile_t* pbf, const char *p, size_t n)
+{
+  int *pcnt = bufbk(&pbf->counts);
+  chbuf_t *pcb = bufbk(&pbf->chbufs);
+  assert(*pcnt % 2 == 1);
+  chbput4le(n, pcb);
+  chbputc(0, pcb); /* generic binary */
+  chbput(p, n, pcb);  
+  *pcnt += 1;
+}
+
+static void bfinit_ii(BFILE* pf, pii_t pii, void *dp, bool bbuf) 
+{
+  memset(pf, 0, sizeof(BFILE));
+  pf->pbf = exmalloc(sizeof(bfile_t));
+  bfile_init_ii(pf->pbf, pii, dp, bbuf);
+  pf->ownsfile = false;
+  pf->loading = true;
+}
+
+static void bfinit_oi(BFILE* pf, poi_t poi, void *dp, bool bbuf) 
+{
+  memset(pf, 0, sizeof(BFILE));
+  pf->pbf = exmalloc(sizeof(bfile_t));
+  bfile_init_oi(pf->pbf, poi, dp, bbuf);
+  pf->ownsfile = false;
+  pf->loading = false;
+}
+
+BFILE* newbfii(pii_t pii, void *dp)
+{
+  BFILE* pf;
+  assert(pii);
+  pf = exmalloc(sizeof(BFILE));
+  bfinit_ii(pf, pii, dp, true); 
+  return pf;
+}
+
+BFILE* newbfoi(poi_t poi, void *dp)
+{
+  BFILE* pf;
+  assert(poi);
+  pf = exmalloc(sizeof(BFILE));
+  bfinit_oi(pf, poi, dp, true); 
+  return pf;
+}
+
+void freebf(BFILE* pf) /* closes the file if not stdin/stdout/stderr */
+{
+  if (pf) {
+    if (pf->ownsfile) bfile_close(pf->pbf);
+    else bfile_fini(pf->pbf);
+    free(pf->pbf);
+    free(pf);
+  }
+}
+
+void bferror(BFILE* pf, const char* fmt, ...)
+{
+  va_list args;
+  assert(pf); assert(fmt);
+  va_start(args, fmt);
+  bfile_verr(pf->loading, pf->pbf, fmt, args);
+  va_end(args);
+}
+
+void bfputobrk(BFILE* pf)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_ARR);
+  bfile_opendoc(pf->pbf);  
+}
+
+void bfputcbrk(BFILE* pf)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_closedoc(pf->pbf);
+}
+
+void bfputobrc(BFILE* pf)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_OBJ);
+  bfile_opendoc(pf->pbf);
+}
+
+void bfputcbrc(BFILE* pf)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_closedoc(pf->pbf);
+}
+
+void bfputkey(BFILE* pf, const char *key)
+{
+  assert(pf); assert(!pf->loading);
+  assert(key);
+  bfile_setkeyn(pf->pbf, key, strlen(key));
+}
+
+void bfputkeyn(BFILE* pf, const char *key, size_t n)
+{
+  assert(pf); assert(!pf->loading);
+  assert(key);
+  bfile_setkeyn(pf->pbf, key, n);
+}
+
+void bfputnull(BFILE* pf)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_NULL);
+  bfile_putnull(pf->pbf);
+}
+
+void bfputbool(BFILE* pf, bool b)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_BOOL);
+  bfile_putbool(pf->pbf, b);
+}
+
+void bfputnum(BFILE* pf, int num)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_INT32);
+  bfile_puti32(pf->pbf, (int32_t)num);
+}
+
+void bfputnumu(BFILE* pf, unsigned num)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_INT32);
+  bfile_puti64(pf->pbf, (int32_t)num);
+}
+
+void bfputnumll(BFILE* pf, long long num)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_INT64);
+  bfile_puti64(pf->pbf, (int64_t)num);
+}
+
+void bfputnumull(BFILE* pf, unsigned long long num)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_INT64);
+  bfile_puti64(pf->pbf, (int64_t)num);
+}
+
+void bfputnumd(BFILE* pf, double num)
+{
+  union { int64_t i; double f; } ud;
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_FLOAT);
+  ud.f = num;
+  bfile_puti64(pf->pbf, ud.i);
+}
+
+void bfputstr(BFILE* pf, const char *str)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_STR);
+  bfile_putstr(pf->pbf, str, strlen(str));
+}
+
+void bfputstrn(BFILE* pf, const char *str, size_t n)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_STR);
+  bfile_putstr(pf->pbf, str, n);
 }
 
 

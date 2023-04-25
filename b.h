@@ -99,7 +99,7 @@ typedef struct buf {
 } buf_t;
 extern buf_t* bufinit(buf_t* pb, size_t esz);
 extern buf_t* buficpy(buf_t* mem, const buf_t* pb);
-extern void *buffini(buf_t* pb);
+extern void* buffini(buf_t* pb);
 extern buf_t mkbuf(size_t esz);
 extern buf_t* newbuf(size_t esz);
 extern void freebuf(buf_t* pb);
@@ -113,12 +113,12 @@ extern void* bufref(buf_t* pb, size_t i);
 extern void bufrem(buf_t* pb, size_t i);
 extern void bufnrem(buf_t* pb, size_t i, size_t n);
 extern void* bufins(buf_t* pb, size_t i);
-extern void *bufbk(buf_t* pb);
-extern void *bufnewbk(buf_t* pb);
-extern void *bufpopbk(buf_t* pb);
-extern void *bufnewfr(buf_t* pb);
+extern void* bufbk(buf_t* pb);
+extern void* bufnewbk(buf_t* pb);
+extern void* bufpopbk(buf_t* pb);
+extern void* bufnewfr(buf_t* pb);
 extern void  bufpopfr(buf_t* pb);
-extern void *bufalloc(buf_t* pb, size_t n);
+extern void* bufalloc(buf_t* pb, size_t n);
 extern void bufrev(buf_t* pb);
 extern void bufcpy(buf_t* pb, const buf_t* pab);
 extern void bufcat(buf_t* pb, const buf_t* pab);
@@ -185,6 +185,7 @@ extern void chbputg(double v, chbuf_t* pcb);
 extern void chbputvf(chbuf_t* pcb, const char *fmt, va_list ap);
 extern void chbputf(chbuf_t* pcb, const char *fmt, ...);
 extern void chbput4le(unsigned v, chbuf_t* pcb);
+extern void chbput8le(unsigned long long v, chbuf_t* pcb);
 extern void chbputtime(const char *fmt, const struct tm *tp, chbuf_t* pcb);
 extern void chbinsc(chbuf_t* pcb, size_t n, int c);
 extern void chbinss(chbuf_t* pcb, size_t n, const char *s);
@@ -321,13 +322,17 @@ extern void jferror(JFILE* pf, const char* fmt, ...);
 
 /* type of json value */
 typedef enum { 
-  JVT_ARR, JVT_OBJ, 
-  JVT_NULL, JVT_BOOL, 
-  JVT_INT, JVT_UINT, 
-  JVT_FLOAT, JVT_STR 
+  JVT_ARR, 
+  JVT_OBJ, 
+  JVT_NULL, 
+  JVT_BOOL, 
+  JVT_INT, 
+  JVT_UINT, 
+  JVT_FLOAT, 
+  JVT_STR 
 } jvtype_t;
 
-/* input operations (ignore whitespace between tokens) */
+/* input operations */
 extern bool jfateof(JFILE* pf); /* end of file? */
 extern void jfgetobrk(JFILE* pf); /* [ */
 extern bool jfatcbrk(JFILE* pf);  /* ...]? */
@@ -359,4 +364,68 @@ extern void jfputnumd(JFILE* pf, double num); /* num as double */
 extern void jfputstr(JFILE* pf, const char *str); /* "str" */
 extern void jfputstrn(JFILE* pf, const char *str, size_t n); /* "str" */
 extern void jfflush(JFILE* pf);
+
+/* bson i/o "file" */
+typedef struct BFILE_tag {
+  /* base (internal) */
+  struct bfile_tag* pbf;
+  bool ownsfile;
+  /* context */
+  bool loading;
+} BFILE;
+
+/* constructors/destructors */
+extern BFILE* newbfii(pii_t pii, void *dp);
+extern BFILE* newbfoi(poi_t poi, void *dp);
+extern void freebf(BFILE* pf);
+extern void bferror(BFILE* pf, const char* fmt, ...);
+
+/* type of bson value */
+typedef enum { 
+  BVT_FLOAT = 0x01,
+  BVT_STR   = 0x02,
+  BVT_OBJ   = 0x03,
+  BVT_ARR   = 0x04,
+  BVT_BIN   = 0x05,
+  BVT_BOOL  = 0x08,
+  BVT_INT32 = 0x10, 
+  BVT_INT64 = 0x12, 
+  BVT_NULL  = 0x0A
+} bvtype_t;
+
+/* input operations */
+extern bool bfateof(BFILE* pf); /* end of file? */
+extern void bfgetobrk(BFILE* pf); /* [ */
+extern bool bfatcbrk(BFILE* pf);  /* ...]? */
+extern void bfgetcbrk(BFILE* pf); /* ] */
+extern void bfgetobrc(BFILE* pf); /* { */
+extern char* bfgetkey(BFILE* pf, chbuf_t* pcb); /* "key": */
+extern bool bfatcbrc(BFILE* pf);  /* ...}? */
+extern void bfgetcbrc(BFILE* pf); /* } */
+extern bvtype_t bfpeek(BFILE* pf); /* type of value ahead */
+extern void bfgetnull(BFILE* pf); /* null */
+extern bool bfgetbool(BFILE* pf); /* true/false */
+extern int bfgetnum(BFILE* pf); /* num as int */
+extern unsigned bfgetnumu(BFILE* pf); /* num as unsigned */
+extern long long bfgetnumll(BFILE* pf); /* num as long long */
+extern unsigned long long bfgetnumull(BFILE* pf); /* num as unsigned long long */
+extern double bfgetnumd(BFILE* pf); /* num as double */
+extern char* bfgetstr(BFILE* pf, chbuf_t* pcb);
+
+/* output operations */
+extern void bfputobrk(BFILE* pf); /* open array */
+extern void bfputcbrk(BFILE* pf); /* close array */
+extern void bfputobrc(BFILE* pf); /* open object */
+extern void bfputkey(BFILE* pf, const char *key); /* "key": */
+extern void bfputkeyn(BFILE* pf, const char *key, size_t n); /* "key": */
+extern void bfputcbrc(BFILE* pf); /* close object */
+extern void bfputnull(BFILE* pf); /* null */
+extern void bfputbool(BFILE* pf, bool b); /* true/false */
+extern void bfputnum(BFILE* pf, int num); /* num as int */
+extern void bfputnumu(BFILE* pf, unsigned num); /* num as unsigned int */
+extern void bfputnumll(BFILE* pf, long long num); /* num as long long */
+extern void bfputnumull(BFILE* pf, unsigned long long num); /* num as unsigned long long */
+extern void bfputnumd(BFILE* pf, double num); /* num as double */
+extern void bfputstr(BFILE* pf, const char *str); /* "str" */
+extern void bfputstrn(BFILE* pf, const char *str, size_t n); /* "str" */
 
