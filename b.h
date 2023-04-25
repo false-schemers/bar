@@ -134,6 +134,7 @@ typedef buf_t dsbuf_t;
 #define dsbinit(mem) (bufinit(mem, sizeof(dstr_t)))
 extern void dsbicpy(dsbuf_t* mem, const dsbuf_t* pb);
 extern void dsbfini(dsbuf_t* pb);
+extern void dsbclear(dsbuf_t* pb);
 #define dsblen(pb) (buflen(pb))
 #define dsbref(pb, i) ((dstr_t*)bufref(pb, i))
 #define dsbpushbk(pb, pds) (dsicpy(bufnewbk(pb), pds))
@@ -163,6 +164,7 @@ typedef buf_t chbuf_t;
 #define chblen(pb) (buflen(pb))
 #define chbclear(pb) (bufclear(pb))
 #define chbempty(pb) (buflen(pb) == 0)
+#define chballoc(pb, n) ((char*)bufalloc(pb, n))
 extern void chbputc(int c, chbuf_t* pcb);
 #define chbputc(c, pb) (*(char*)bufnewbk(pb) = (char)(c))
 extern void chbput(const char *s, size_t n, chbuf_t* pcb);
@@ -245,6 +247,9 @@ typedef struct fsstat_tag {
 } fsstat_t;
 /* retrieve status of a file system object; return false on error */
 extern bool fsstat(const char *path, fsstat_t *ps);
+
+/* list full dir content as file/dir names */
+extern bool dir(const char *dirpath, dsbuf_t *pdsv);
 
 /* simple char input abstraction */
 typedef struct ii_tag {

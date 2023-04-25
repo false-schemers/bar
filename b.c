@@ -885,12 +885,18 @@ void dsbicpy(dsbuf_t* mem, const dsbuf_t* pb)
   for (i = 0; i < pb->fill; ++i) dsicpy(pdsm+i, pds+i);
 }
 
-void dsbfini(dsbuf_t* pb)
+void dsbclear(dsbuf_t* pb)
 {
   dstr_t *pds; size_t i;
   assert(pb); assert(pb->esz == sizeof(dstr_t));
   pds = (dstr_t*)(pb->buf);
   for (i = 0; i < pb->fill; ++i) dsfini(pds+i);
+  bufclear(pb);
+}
+
+void dsbfini(dsbuf_t* pb)
+{
+  dsbclear(pb);
   buffini(pb);
 }
 
@@ -3525,5 +3531,180 @@ bool fsstat(const char *path, fsstat_t *ps)
   ps->isdir = S_ISDIR(s.st_mode);
   ps->size = (uint64_t)s.st_size;
   return true; 
+}
+
+/* Windows dirent */
+#if defined(_MSC_VER)
+
+/* Windows implementation of the directory stream type (taken from SCM).
+ * The miscellaneous Unix `readdir' implementations read directory data
+ * into a buffer and return `struct dirent *' pointers into it. */
+
+#include <sys/types.h>
+
+typedef struct dirstream {
+  void* fd;           /* File descriptor.  */
+  char *data;         /* Directory block.  */
+  size_t allocation;  /* Space allocated for the block.  */
+  size_t size;        /* Total valid data in the block.  */
+  size_t offset;      /* Current offset into the block.  */
+  off_t filepos;      /* Position of next entry to read.  */
+  wchar_t *mask;      /* Initial file mask. */
+} DIR;
+
+struct dirent {
+  off_t d_off;
+  size_t d_reclen;
+  char d_name[FILENAME_MAX];
+};
+
+DIR *opendir (const char *name);
+struct dirent *readdir(DIR *dir);
+int closedir (DIR *dir);
+void rewinddir (DIR *dir);
+void seekdir (DIR *dir, off_t offset);
+off_t telldir (DIR *dir);
+
+DIR *opendir(const char *name)
+{
+  DIR *dir;
+  HANDLE hnd;
+  char *file;
+  WIN32_FIND_DATAW find;
+  buf_t pwcv; /* to store wide chars */
+  wchar_t *wfile, *ws;
+  
+  if (!name || !*name) return NULL;
+
+  pwcv = mkbuf(sizeof(wchar_t));
+  file = exmalloc(strlen(name) + 3);
+  strcpy(file, name);
+  if (file[strlen(name) - 1] != '/' && file[strlen(name) - 1] != '\\')
+    strcat(file, "/*");
+  else
+    strcat(file, "*");
+  
+  { /* convert from ANSI code page multibyte */
+    bufresize(&pwcv, FILENAME_MAX);
+    wfile = bufdata(&pwcv);
+    if (mbstowcs(wfile, file, FILENAME_MAX) == (size_t) -1)
+      wfile = NULL;
+  }
+  
+  if (wfile == NULL ||
+      (hnd = FindFirstFileW(wfile, &find)) == INVALID_HANDLE_VALUE) {
+    free(file);
+    buffini(&pwcv);
+    return NULL;
+  }
+  
+  ws = excalloc(wcslen(wfile)+1, sizeof(wchar_t));
+  wcscpy(ws, wfile);
+
+  dir = exmalloc(sizeof(DIR));
+  dir->mask = ws;
+  dir->fd = hnd;
+  dir->data = malloc(sizeof(WIN32_FIND_DATAW));
+  dir->allocation = sizeof(WIN32_FIND_DATAW);
+  dir->size = dir->allocation;
+  dir->filepos = 0;
+  memcpy(dir->data, &find, sizeof(WIN32_FIND_DATAW));
+  free(file);
+  buffini(&pwcv);
+  return dir;
+}
+
+struct dirent *readdir(DIR *dir)
+{
+  static struct dirent entry; /* non-reentrant! */
+  WIN32_FIND_DATAW *find;
+  chbuf_t cb; /* to store utf-8 chars */
+  char *fname;
+  
+  assert(dir);
+  assert((HANDLE)(dir->fd) != INVALID_HANDLE_VALUE);
+  find = (WIN32_FIND_DATAW *)(dir->data);
+
+  if (dir->filepos) {
+    if (!FindNextFileW((HANDLE)(dir->fd), find))
+      return NULL;
+  }
+
+  cb = mkchb();
+  entry.d_off = dir->filepos;
+  { /* convert to ANSI code page multibyte */
+    fname = chballoc(&cb, sizeof(entry.d_name));
+    if (wcstombs(fname, find->cFileName, sizeof(entry.d_name)) == (size_t)-1)
+      fname = NULL;
+  }
+  if (fname == NULL) {
+    chbfini(&cb);
+    return NULL;
+  }
+  entry.d_reclen = strlen(fname);
+  if (entry.d_reclen+1 > sizeof(entry.d_name)) {
+    chbfini(&cb);
+    return NULL;
+  }
+  strncpy(entry.d_name, fname, sizeof(entry.d_name));
+  dir->filepos++;
+  
+  chbfini(&cb);
+  return &entry;
+}
+
+int closedir(DIR *dir)
+{
+  HANDLE hnd = (HANDLE)(dir->fd);
+  free(dir->data);
+  free(dir->mask);
+  free(dir);
+  return FindClose(hnd) ? 0 : -1;
+}
+
+void rewinddir(DIR *dir)
+{
+  HANDLE hnd = (HANDLE)(dir->fd);
+  WIN32_FIND_DATAW *find = (WIN32_FIND_DATAW *)(dir->data);
+  FindClose(hnd);
+  hnd = FindFirstFileW(dir->mask, find);
+  dir->fd = hnd;
+  dir->filepos = 0;
+}
+
+void seekdir(DIR *dir, off_t offset)
+{
+  off_t n;
+  rewinddir(dir);
+  for (n = 0; n < offset; n++) {
+    if (FindNextFileW((HANDLE)(dir->fd), (WIN32_FIND_DATAW *)(dir->data)))
+       dir->filepos++;
+  }
+}
+
+off_t telldir(DIR *dir)
+{
+  return dir->filepos;
+}
+
+#endif /* Windows dirent */
+
+/* list full dir content as file/dir names */
+bool dir(const char *dirpath, dsbuf_t *pdsv)
+{
+   DIR *pdir;
+   struct dirent *pde;
+   assert(pdsv);
+   assert(dirpath);
+   dsbclear(pdsv);
+   /* NB: dirent is not reentrant! */
+   pdir = opendir(dirpath);
+   if (!pdir) return false;
+   while ((pde = readdir(pdir)) != NULL) {
+     char *name = pde->d_name;
+     dsbpushbk(pdsv, &name);
+   }
+   closedir(pdir);
+   return true;
 }
 

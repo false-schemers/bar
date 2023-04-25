@@ -301,30 +301,48 @@ void list(void)
   fclose(fp);
 }
 
+void addfde(const char *path, fdebuf_t *pfdeb)
+{
+  fsstat_t st;
+  if (fsstat(path, &st) && (st.isdir || st.isreg)) {
+    char *fname = getfname(path);
+    fdent_t *pfde = fdebnewbk(pfdeb);
+    pfde->name = exstrdup(fname);
+    pfde->isdir = st.isdir;
+    pfde->size = st.size;  
+    if (excluded(path)) {
+      pfde->unpacked = true;
+    } else {
+      if (pfde->isdir) {
+        chbuf_t cb = mkchb();
+        dsbuf_t dsb; dsbinit(&dsb);
+        if (dir(path, &dsb)) {
+          size_t i;
+          for (i = 0; i < dsblen(&dsb); ++i) {
+            dstr_t *pds = dsbref(&dsb, i);
+            if (streql(*pds, ".") || streql(*pds, "..")) continue;
+            addfde(chbsetf(&cb, "%s/%s", path, *pds), pfdeb);
+          }
+        } else {
+          exprintf("can't open directory: %s", path);
+        }
+        dsbfini(&dsb);
+        chbfini(&cb);
+      }
+    }
+  } else {
+    exprintf("can't stat file or directory: %s", path);
+  }
+}
+
 void create(int argc, char **argv)
 {
   chbuf_t hcb = mkchb(); int i;
   fdebuf_t fdeb; fdebinit(&fdeb);
-  
   for (i = 0; i < argc; ++i) {
     /* NB: we don't care where file/dir arg is located */
-    char *path = argv[i]; fsstat_t st; 
-    if (fsstat(path, &st) && (st.isdir || st.isreg)) {
-      char *fname = getfname(path);
-      fdent_t *pfde = fdebnewbk(&fdeb);
-      pfde->name = exstrdup(fname);
-      pfde->isdir = st.isdir;
-      pfde->size = st.size;  
-      if (excluded(path)) {
-        pfde->unpacked = true;
-      } else {
-        //if (pfde->isdir)
-      }
-    } else {
-      exprintf("can't find file or directory: %s", path);
-    }
+    addfde(argv[i], &fdeb);
   }
-  
   list_fdebuf(NULL, &fdeb, stdout, getverbosity() > 0);
   chbfini(&hcb); fdebfini(&fdeb);
 }
@@ -357,6 +375,7 @@ int main(int argc, char **argv)
      "  -f, --file=FILE              Use archive FILE\n"
      "  -C, --directory=DIR          Use directory DIR for extracted files\n"
      "  -X, --exclude-from=FILE      Exclude files via globbing patterns in FILE\n"
+     "  --exclude=\"PATTERN\"        Exclude files, given as a globbing PATTERN\n"
      "\n"
      "Informative output:\n"
      "  -v, --verbose                Increase output verbosity\n"
@@ -376,13 +395,14 @@ int main(int argc, char **argv)
       case 'q': incquietness(); break;
       case 'h': g_cmd = 'h'; break;
       case '-': {
-        const char *arg;
+        char *arg;
         if (streql(eoptarg, "create")) g_cmd = 'c';
         else if (streql(eoptarg, "list")) g_cmd = 't';
         else if (streql(eoptarg, "extract")) g_cmd = 'x';
         else if ((arg = strprf(eoptarg, "file=")) != NULL) g_arfile = arg;
         else if ((arg = strprf(eoptarg, "directory=")) != NULL) g_dstdir = arg;
         else if ((arg = strprf(eoptarg, "exclude-from=")) != NULL) g_exfile = arg;
+        else if ((arg = strprf(eoptarg, "exclude=")) != NULL) dsbpushbk(&g_expats, &arg);
         else if (streql(eoptarg, "verbose")) incverbosity();
         else if (streql(eoptarg, "quiet")) incquietness();
         else if (streql(eoptarg, "help")) g_cmd = 'h';
