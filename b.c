@@ -3396,10 +3396,12 @@ typedef struct bfile_tag {
   int (*flush)(void*);
   void* pfile;
   dstr_t fname;
-  bool autoflush;
-  chbuf_t kbuf; /* key buf */
-  buf_t chbufs; /* stack of tmp bufs */
-  buf_t counts; /* stack of counts */
+  bvtype_t dvt; /* doc val type (in) */  
+  bvtype_t kvt; /* key val type (in) */  
+  chbuf_t kbuf; /* key buf (i/o) */
+  buf_t parvts; /* stack of parent vts (in) */
+  buf_t chbufs; /* stack of tmp bufs (out) */
+  buf_t counts; /* stack of counts (out) */
 } bfile_t;
 
 static void bfile_init_ii(bfile_t* pbf, pii_t pii, void* dp, bool bbuf)
@@ -3414,8 +3416,10 @@ static void bfile_init_ii(bfile_t* pbf, pii_t pii, void* dp, bool bbuf)
   pbf->putc = null_poi->putc;
   pbf->puts = null_poi->puts;
   pbf->flush = null_poi->flush;
-  pbf->autoflush = !bbuf;
+  pbf->dvt = BVT_OBJ;
+  pbf->kvt = 0;
   chbinit(&pbf->kbuf);
+  bufinit(&pbf->parvts, sizeof(bvtype_t));
   bufinit(&pbf->chbufs, sizeof(chbuf_t));
   bufinit(&pbf->counts, sizeof(int));
 }
@@ -3432,8 +3436,10 @@ static void bfile_init_oi(bfile_t* pbf, poi_t poi, void* dp, bool bbuf)
   pbf->putc = poi->putc;
   pbf->puts = poi->puts;
   pbf->flush = poi->flush;
-  pbf->autoflush = !bbuf;
+  pbf->dvt = BVT_OBJ;
+  pbf->kvt = 0;
   chbinit(&pbf->kbuf);
+  bufinit(&pbf->parvts, sizeof(bvtype_t));
   bufinit(&pbf->chbufs, sizeof(chbuf_t));
   bufinit(&pbf->counts, sizeof(int));
 }
@@ -3443,6 +3449,7 @@ static void bfile_fini(bfile_t* pbf)
   size_t i;
   free(pbf->fname); 
   chbfini(&pbf->kbuf);
+  buffini(&pbf->parvts);
   for (i = 0; i < buflen(&pbf->chbufs); ++i) chbfini(bufref(&pbf->chbufs, i)); 
   buffini(&pbf->chbufs);
   buffini(&pbf->counts);
@@ -3486,6 +3493,138 @@ static void bfile_oerr(bfile_t* pbf, const char *fmt, ...)
   va_end(args);
 }
 
+static const char* bfile_getkey(bfile_t* pbf)
+{
+  if (pbf->kvt == 0) {
+    pbf->kvt = pbf->getc(pbf->pfile);
+    if (pbf->kvt == 0) bfile_ierr(pbf, "peek at end of obj/array");
+    assert(pbf->kvt >= BVT_FLOAT && pbf->kvt <= BVT_INT64);
+    chbclear(&pbf->kbuf);
+    while (true) { 
+      int c = pbf->getc(pbf->pfile); 
+      if (c == EOF) bfile_ierr(pbf, "unexpected end-of-file");
+      if (c == 0) break;
+      chbputc(c, &pbf->kbuf);
+    }
+  }
+  return chbdata(&pbf->kbuf);
+}
+
+static bvtype_t bfile_peekvt(bfile_t* pbf)
+{
+  bfile_getkey(pbf);
+  return pbf->kvt;  
+}
+
+static bool bfile_atzero(bfile_t* pbf, bvtype_t vt)
+{
+  int c;
+  assert(pbf->dvt == vt);
+  c = pbf->getc(pbf->pfile);
+  if (c == EOF) bfile_ierr(pbf, "unexpected end-of-file");
+  pbf->ungetc(c, pbf->pfile);
+  return c == 0;
+}
+
+static void bfile_opendoc(bfile_t* pbf, bvtype_t vt)
+{
+  char buf[4];
+  bvtype_t *pvt;
+  if (pbf->dvt == BVT_ARR) bfile_getkey(pbf);
+  pvt = bufnewbk(&pbf->parvts);
+  assert((!pbf->kvt && vt == BVT_OBJ) || pbf->kvt == vt);
+  *pvt = pbf->dvt; pbf->dvt = vt;
+  pbf->read(buf, 4, 1, pbf->pfile); 
+  /* size is ignored: we can rely on 0 terminators */
+  pbf->kvt = 0; /* ready to read keys */
+} 
+
+static void bfile_closedoc(bfile_t* pbf, bvtype_t vt)
+{
+  int c = pbf->getc(pbf->pfile);
+  if (c != 0) bfile_ierr(pbf, "missing end of obj/array");
+  if (!bufempty(&pbf->parvts)) {
+    bvtype_t *pvt = bufpopbk(&pbf->parvts);
+    pbf->dvt = *pvt;
+  } else { /* must be on top */
+    assert(vt == BVT_OBJ);
+    pbf->dvt = 0;
+  }
+  pbf->kvt = 0;
+}
+
+static void bfile_getnull(bfile_t* pbf)
+{
+  if (pbf->dvt == BVT_ARR) bfile_getkey(pbf);
+  if (pbf->kvt != BVT_NULL) bfile_ierr(pbf, "null expected");
+  pbf->kvt = 0;
+}
+
+static bool bfile_getbool(bfile_t* pbf)
+{
+  int c;
+  if (pbf->dvt == BVT_ARR) bfile_getkey(pbf);
+  c = pbf->getc(pbf->pfile);
+  if (pbf->kvt != BVT_BOOL || (c != 0 && c != 1)) bfile_ierr(pbf, "bool expected");
+  pbf->kvt = 0;
+  return c;
+}
+
+static uint32_t bfile_geti32(bfile_t* pbf)
+{
+  uint8_t b[4]; unsigned n; uint32_t v;
+  if (pbf->dvt == BVT_ARR) bfile_getkey(pbf);
+  n = pbf->read(b, 1, 4, pbf->pfile);
+  if (pbf->kvt != BVT_INT32 || n != 4) bfile_ierr(pbf, "int32 expected");
+  v = ((uint32_t)b[3] << 24) | ((uint32_t)b[2] << 16) 
+    | ((uint32_t)b[1] << 8)  |  (uint32_t)b[0];
+  pbf->kvt = 0;
+  return v;
+}
+
+static uint64_t bfile_geti64(bfile_t* pbf)
+{
+  uint8_t b[8]; unsigned n; uint64_t v;
+  if (pbf->dvt == BVT_ARR) bfile_getkey(pbf);
+  n = pbf->read(b, 1, 8, pbf->pfile);
+  if (pbf->kvt != BVT_INT32 || n != 8) bfile_ierr(pbf, "int64 expected");
+  v = ((uint64_t)b[7] << 56) | ((uint64_t)b[6] << 48) 
+    | ((uint64_t)b[5] << 40) | ((uint64_t)b[4] << 32) 
+    | ((uint64_t)b[3] << 24) | ((uint64_t)b[2] << 16) 
+    | ((uint64_t)b[1] << 8)  |  (uint64_t)b[0];
+  pbf->kvt = 0;
+  return v;
+}
+
+static double bfile_getfloat(bfile_t* pbf)
+{
+  uint8_t b[8]; unsigned n; union { uint64_t u; double f; } v;
+  if (pbf->dvt == BVT_ARR) bfile_getkey(pbf);
+  n = pbf->read(b, 1, 8, pbf->pfile);
+  if (pbf->kvt != BVT_FLOAT || n != 8) bfile_ierr(pbf, "float expected");
+  v.u = ((uint64_t)b[7] << 56) | ((uint64_t)b[6] << 48) 
+      | ((uint64_t)b[5] << 40) | ((uint64_t)b[4] << 32) 
+      | ((uint64_t)b[3] << 24) | ((uint64_t)b[2] << 16) 
+      | ((uint64_t)b[1] << 8)  |  (uint64_t)b[0];
+  pbf->kvt = 0;
+  return v.f;
+}
+
+static char* bfile_getstr(bfile_t* pbf, chbuf_t* pcb)
+{
+  uint8_t b[4]; unsigned n; uint32_t v;
+  if (pbf->dvt == BVT_ARR) bfile_getkey(pbf);
+  n = pbf->read(b, 1, 4, pbf->pfile);
+  v = ((uint32_t)b[3] << 24) | ((uint32_t)b[2] << 16) 
+    | ((uint32_t)b[1] << 8)  |  (uint32_t)b[0];
+  if (pbf->kvt != BVT_STR || n != 4 || !v) bfile_ierr(pbf, "string expected");
+  chbclear(pcb); 
+  n = pbf->read(chballoc(pcb, v-1), 1, v-1, pbf->pfile);
+  if (n != v-1 || pbf->getc(pbf->pfile) != 0) bfile_ierr(pbf, "expected end of string");
+  pbf->kvt = 0;
+  return chbdata(pcb);
+}
+
 static void bfile_setkeyn(bfile_t* pbf, const char *key, size_t n)
 {
   int *pcnt;
@@ -3496,7 +3635,7 @@ static void bfile_setkeyn(bfile_t* pbf, const char *key, size_t n)
   chbset(&pbf->kbuf, key, n);
 }
 
-static void bfile_putkey(bfile_t* pbf, bvtype_t bvt)
+static void bfile_putkey(bfile_t* pbf, bvtype_t vt)
 {
   if (!bufempty(&pbf->counts)) {
     int *pcnt = bufbk(&pbf->counts);
@@ -3506,19 +3645,19 @@ static void bfile_putkey(bfile_t* pbf, bvtype_t bvt)
       *pcnt += 1; /* key is in tbuf */
     }
     chbputc(0, &pbf->kbuf);
-    chbputc((int)bvt, pcb);
+    chbputc((int)vt, pcb);
     chbcat(pcb, &pbf->kbuf);
     chbclear(&pbf->kbuf); 
   }  
 }
 
-static void bfile_opendoc(bfile_t* pbf)
+static void bfile_startdoc(bfile_t* pbf)
 {
   chbinit(bufnewbk(&pbf->chbufs));
   bufnewbk(&pbf->counts);
 }
 
-static void bfile_closedoc(bfile_t* pbf)
+static void bfile_enddoc(bfile_t* pbf)
 {
   chbuf_t *pcb = bufpopbk(&pbf->chbufs), *pccb;
   int *pcnt = bufpopbk(&pbf->counts);
@@ -3535,6 +3674,7 @@ static void bfile_closedoc(bfile_t* pbf)
   chbfini(pcb);
   if (bufempty(&pbf->chbufs)) {
     pbf->write(chbdata(pccb), 1, chblen(pccb), pbf->pfile);
+    pbf->flush(pbf->pfile);
     bufclear(pccb);
   } else {
     pcnt = bufbk(&pbf->counts);
@@ -3654,30 +3794,127 @@ void bferror(BFILE* pf, const char* fmt, ...)
   va_end(args);
 }
 
+
+void bfgetobrk(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  bfile_opendoc(pf->pbf, BVT_ARR); 
+}
+
+bool bfatcbrk(BFILE* pf)
+{
+  return bfile_atzero(pf->pbf, BVT_ARR);
+}
+
+void bfgetcbrk(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  bfile_closedoc(pf->pbf, BVT_ARR); 
+}
+
+void bfgetobrc(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  bfile_opendoc(pf->pbf, BVT_OBJ); 
+}
+
+char* bfgetkey(BFILE* pf, chbuf_t* pcb)
+{
+  const char *key;
+  assert(pf); assert(pf->loading);
+  key = bfile_getkey(pf->pbf);
+  return pcb ? chbsets(pcb, key) : (char* )key;
+}
+
+bool bfatcbrc(BFILE* pf)
+{
+  return bfile_atzero(pf->pbf, BVT_OBJ);
+}
+
+void bfgetcbrc(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  bfile_closedoc(pf->pbf, BVT_OBJ); 
+}
+
+bvtype_t bfpeek(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  return bfile_peekvt(pf->pbf); 
+}
+
+void bfgetnull(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  bfile_getnull(pf->pbf);
+}
+
+bool bfgetbool(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  return bfile_getbool(pf->pbf);
+}
+
+int bfgetnum(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  return (int)bfile_geti32(pf->pbf);
+}
+
+unsigned bfgetnumu(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  return (unsigned)bfile_geti32(pf->pbf);
+}
+
+long long bfgetnumll(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  return (long long)bfile_geti64(pf->pbf);
+}
+
+unsigned long long bfgetnumull(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  return (unsigned long long)bfile_geti64(pf->pbf);
+}
+
+double bfgetnumd(BFILE* pf)
+{
+  assert(pf); assert(pf->loading);
+  return bfile_getfloat(pf->pbf);
+}
+
+char* bfgetstr(BFILE* pf, chbuf_t* pcb)
+{
+  assert(pf); assert(pf->loading);
+  return bfile_getstr(pf->pbf, pcb);
+}
+
 void bfputobrk(BFILE* pf)
 {
   assert(pf); assert(!pf->loading);
   bfile_putkey(pf->pbf, BVT_ARR);
-  bfile_opendoc(pf->pbf);  
+  bfile_startdoc(pf->pbf);  
 }
 
 void bfputcbrk(BFILE* pf)
 {
   assert(pf); assert(!pf->loading);
-  bfile_closedoc(pf->pbf);
+  bfile_enddoc(pf->pbf);
 }
 
 void bfputobrc(BFILE* pf)
 {
   assert(pf); assert(!pf->loading);
   bfile_putkey(pf->pbf, BVT_OBJ);
-  bfile_opendoc(pf->pbf);
+  bfile_startdoc(pf->pbf);
 }
 
 void bfputcbrc(BFILE* pf)
 {
   assert(pf); assert(!pf->loading);
-  bfile_closedoc(pf->pbf);
+  bfile_enddoc(pf->pbf);
 }
 
 void bfputkey(BFILE* pf, const char *key)

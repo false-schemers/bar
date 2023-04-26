@@ -388,13 +388,12 @@ typedef enum {
   BVT_ARR   = 0x04,
   BVT_BIN   = 0x05,
   BVT_BOOL  = 0x08,
+  BVT_NULL  = 0x0A,
   BVT_INT32 = 0x10, 
-  BVT_INT64 = 0x12, 
-  BVT_NULL  = 0x0A
+  BVT_INT64 = 0x12 
 } bvtype_t;
 
 /* input operations */
-extern bool bfateof(BFILE* pf); /* end of file? */
 extern void bfgetobrk(BFILE* pf); /* [ */
 extern bool bfatcbrk(BFILE* pf);  /* ...]? */
 extern void bfgetcbrk(BFILE* pf); /* ] */

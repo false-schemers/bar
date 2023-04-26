@@ -419,6 +419,7 @@ void create(int argc, char **argv)
 void extract(int argc, char **argv)
 {
   FILE *fp; JFILE *jfp; BFILE *bfp;
+  chbuf_t cb = mkchb(); char *r; int ir; double dr; bool br;
   if (!(fp = fopen(g_arfile, "wb"))) exprintf("can't open archive file %s:", g_arfile);
   jfp = newjfoi(FILE_poi, stdout);
   jfputobrc(jfp);
@@ -520,6 +521,58 @@ void extract(int argc, char **argv)
   bfputcbrc(bfp);
   freebf(bfp);
   fclose(fp);
+  if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file (r) %s:", g_arfile);
+  bfp = newbfii(FILE_pii, fp);
+  bfgetobrc(bfp);
+    r=bfgetkey(bfp, &cb); assert(streql(r, "tags"));
+      bfgetobrk(bfp);
+      bfgetcbrk(bfp);
+    r=bfgetkey(bfp, &cb); assert(streql(r, "tz"));
+      ir=bfgetnum(bfp); assert(ir==-25200);
+    r=bfgetkey(bfp, &cb); assert(streql(r, "days"));
+      bfgetobrk(bfp);
+        ir=bfgetnum(bfp); assert(ir==1);
+        ir=bfgetnum(bfp); assert(ir==1);
+        ir=bfgetnum(bfp); assert(ir==2);
+        ir=bfgetnum(bfp); assert(ir==1);
+      bfgetcbrk(bfp);
+    r=bfgetkey(bfp, &cb); assert(streql(r, "coord"));
+      bfgetobrk(bfp);
+        dr=bfgetnumd(bfp); assert(dr==-90.0715);
+        dr=bfgetnumd(bfp); assert(dr==29.9510);
+      bfgetcbrk(bfp);
+    r=bfgetkey(bfp, &cb); assert(streql(r, "data"));
+      bfgetobrk(bfp);
+        bfgetobrc(bfp);
+          r=bfgetkey(bfp, &cb); assert(streql(r, "name"));
+            r=bfgetstr(bfp, &cb); assert(streql(r, "ox03"));
+          r=bfgetkey(bfp, &cb); assert(streql(r, "staff"));
+            br=bfgetbool(bfp); assert(br==true);
+        bfgetcbrc(bfp);
+        bfgetobrc(bfp);
+          r=bfgetkey(bfp, &cb); assert(streql(r, "name"));
+            bfgetnull(bfp);
+          r=bfgetkey(bfp, &cb); assert(streql(r, "staff"));
+            br=bfgetbool(bfp); assert(br==false);
+          r=bfgetkey(bfp, &cb); assert(streql(r, "extra"));
+            bfgetobrc(bfp);
+              r=bfgetkey(bfp, &cb); assert(streql(r, "info"));
+              r=bfgetstr(bfp, &cb); assert(streql(r, ""));
+            bfgetcbrc(bfp);
+        bfgetcbrc(bfp);
+        bfgetobrc(bfp);
+          r=bfgetkey(bfp, &cb); assert(streql(r, "name"));
+            r=bfgetstr(bfp, &cb); assert(streql(r, "ox03"));
+          r=bfgetkey(bfp, &cb); assert(streql(r, "staff"));
+            br=bfgetbool(bfp); assert(br==true);
+        bfgetcbrc(bfp);
+        bfgetobrc(bfp);
+        bfgetcbrc(bfp);
+      bfgetcbrk(bfp);
+  bfgetcbrc(bfp);
+  freebf(bfp);
+  fclose(fp);
+  chbfini(&cb);
 }
 
 int main(int argc, char **argv)
