@@ -358,6 +358,8 @@ extern void jfputkeyn(JFILE* pf, const char *key, size_t n); /* "key": */
 extern void jfputcbrc(JFILE* pf); /* } */
 extern void jfputnull(JFILE* pf); /* null */
 extern void jfputbool(JFILE* pf, bool b); /* true/false */
+extern void jfputnum(JFILE* pf, int num); /* num as int */
+extern void jfputnumu(JFILE* pf, unsigned num); /* num as unsigned */
 extern void jfputnumll(JFILE* pf, long long num); /* num as long long */
 extern void jfputnumull(JFILE* pf, unsigned long long num); /* num as unsigned long long */
 extern void jfputnumd(JFILE* pf, double num); /* num as double */
@@ -409,7 +411,8 @@ extern unsigned bfgetnumu(BFILE* pf); /* num as unsigned */
 extern long long bfgetnumll(BFILE* pf); /* num as long long */
 extern unsigned long long bfgetnumull(BFILE* pf); /* num as unsigned long long */
 extern double bfgetnumd(BFILE* pf); /* num as double */
-extern char* bfgetstr(BFILE* pf, chbuf_t* pcb);
+extern char* bfgetstr(BFILE* pf, chbuf_t* pcb); /* "str" */
+extern char* bfgetbin(BFILE* pf, chbuf_t* pcb); /* binary */
 
 /* output operations */
 extern void bfputobrk(BFILE* pf); /* open array */
@@ -427,4 +430,5 @@ extern void bfputnumull(BFILE* pf, unsigned long long num); /* num as unsigned l
 extern void bfputnumd(BFILE* pf, double num); /* num as double */
 extern void bfputstr(BFILE* pf, const char *str); /* "str" */
 extern void bfputstrn(BFILE* pf, const char *str, size_t n); /* "str" */
+extern void bfputbin(BFILE* pf, const char *str, size_t n); /* binary */
 

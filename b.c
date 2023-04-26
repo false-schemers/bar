@@ -2662,7 +2662,7 @@ static char* jfile_tstring(jfile_t* pjf, chbuf_t* pcb)
     } else {
       c32 = (int32_t)strtou8c(ts, &ts);
     }
-    if (c32 == -1) jfile_ierr(pjf, "invalid chars in string: %.6s...", ts);
+    if (c32 == -1) jfile_ierr(pjf, "invalid chars in string: %s", ts);
     /* TODO: check c32 for valid UNICODE char ranges */
     if (c32 >= 0xD800 && c32 <= 0xDBFF) {
       /* first char of a surrogate pair */
@@ -2716,13 +2716,13 @@ static void jfile_tunstring(jfile_t* pjf, const char *str, size_t n)
       ++str; --n;
       continue;
     }
-    /* get next unocode char */
+    /* get next unicode char */
     c32 = (int32_t)strtou8c(str, &end);
-    if (c32 == -1) jfile_ierr(pjf, "broken utf-8 encoding: %.10s...", str);
-    if (end > str+n) jfile_ierr(pjf, "cut-off utf-8 encoding: %.10s...", str);
+    if (c32 == -1) jfile_ierr(pjf, "broken utf-8 encoding: %s", str);
+    if (end > str+n) jfile_ierr(pjf, "cut-off utf-8 encoding: %s", str);
     if (c32 <= 0x1F) {
       /* should have been taken care of above! */
-      assert(false);
+      jfile_ierr(pjf, "invalid utf-8 encoding: %s", str);
     } else if (c32 <= 0x80) {
       /* put ascii chars as-is */
       assert(c32 == c && end == str+1);
@@ -2738,7 +2738,7 @@ static void jfile_tunstring(jfile_t* pjf, const char *str, size_t n)
       sprintf(buf, "\\u%.4X\\u%.4X", c1, c2); chbputs(buf, pcb);
     } else {
       /* char outside Unicode range? */
-      jfile_ierr(pjf, "nonstandard utf-8 encoding: %.10s...", str);
+      jfile_ierr(pjf, "nonstandard utf-8 encoding: %s", str);
     }
     n -= (size_t)(end-str); str = end;
   }
@@ -3332,6 +3332,11 @@ void jfputnumd(JFILE* pf, double num) /* num as double */
   pf->state = S_AFTER_VALUE;
 }
 
+void jfputnum(JFILE* pf, int num) /* num as int */
+{
+  jfputnumll(pf, num);
+}
+
 void jfputnumll(JFILE* pf, long long num) /* num as long long */
 {
   jfile_t* pjf;
@@ -3342,6 +3347,11 @@ void jfputnumll(JFILE* pf, long long num) /* num as long long */
   jfile_tunnumberll(pjf, num);
   jfile_putt(pjf);
   pf->state = S_AFTER_VALUE;
+}
+
+void jfputnumu(JFILE* pf, unsigned num) /* num as unsigned */
+{
+  jfputnumull(pf, num);
 }
 
 void jfputnumull(JFILE* pf, unsigned long long num) /* num as unsigned long long */
@@ -3493,12 +3503,21 @@ static void bfile_oerr(bfile_t* pbf, const char *fmt, ...)
   va_end(args);
 }
 
+static bool supported_vt(bvtype_t vt)
+{
+  switch (vt) {
+    case BVT_FLOAT: case BVT_STR:  case BVT_OBJ:   case BVT_ARR:   case BVT_BIN:
+    case BVT_BOOL:  case BVT_NULL: case BVT_INT32: case BVT_INT64: return true;
+  }
+  return false;
+}
+
 static const char* bfile_getkey(bfile_t* pbf)
 {
   if (pbf->kvt == 0) {
     pbf->kvt = pbf->getc(pbf->pfile);
     if (pbf->kvt == 0) bfile_ierr(pbf, "peek at end of obj/array");
-    assert(pbf->kvt >= BVT_FLOAT && pbf->kvt <= BVT_INT64);
+    if (!supported_vt(pbf->kvt)) bfile_ierr(pbf, "unsupported type code: %d", pbf->kvt);
     chbclear(&pbf->kbuf);
     while (true) { 
       int c = pbf->getc(pbf->pfile); 
@@ -3620,9 +3639,24 @@ static char* bfile_getstr(bfile_t* pbf, chbuf_t* pcb)
   if (pbf->kvt != BVT_STR || n != 4 || !v) bfile_ierr(pbf, "string expected");
   chbclear(pcb); 
   n = pbf->read(chballoc(pcb, v-1), 1, v-1, pbf->pfile);
-  if (n != v-1 || pbf->getc(pbf->pfile) != 0) bfile_ierr(pbf, "expected end of string");
+  if (n != v-1 || pbf->getc(pbf->pfile) != 0) bfile_ierr(pbf, "missing end of string");
   pbf->kvt = 0;
   return chbdata(pcb);
+}
+
+static void bfile_getbin(bfile_t* pbf, chbuf_t* pcb)
+{
+  uint8_t b[4]; unsigned n; int st; uint32_t v;
+  if (pbf->dvt == BVT_ARR) bfile_getkey(pbf);
+  n = pbf->read(b, 1, 4, pbf->pfile);
+  v = ((uint32_t)b[3] << 24) | ((uint32_t)b[2] << 16) 
+    | ((uint32_t)b[1] << 8)  |  (uint32_t)b[0];
+  st = pbf->getc(pbf->pfile); /* subtype is ignored */
+  if (pbf->kvt != BVT_BIN || n != 4 || st == EOF) bfile_ierr(pbf, "binary block expected");
+  chbclear(pcb); 
+  n = pbf->read(chballoc(pcb, v), 1, v, pbf->pfile);
+  if (n != v) bfile_ierr(pbf, "unexpected end of binary block");
+  pbf->kvt = 0;
 }
 
 static void bfile_setkeyn(bfile_t* pbf, const char *key, size_t n)
@@ -3728,7 +3762,7 @@ static void bfile_putstr(bfile_t* pbf, const char *p, size_t n)
   *pcnt += 1;
 }
 
-static void bfile_putdata(bfile_t* pbf, const char *p, size_t n)
+static void bfile_putbin(bfile_t* pbf, const char *p, size_t n)
 {
   int *pcnt = bufbk(&pbf->counts);
   chbuf_t *pcb = bufbk(&pbf->chbufs);
@@ -3891,6 +3925,12 @@ char* bfgetstr(BFILE* pf, chbuf_t* pcb)
   return bfile_getstr(pf->pbf, pcb);
 }
 
+char* bfgetbin(BFILE* pf, chbuf_t* pcb)
+{
+  assert(pf); assert(pf->loading);
+  return bfile_getstr(pf->pbf, pcb);
+}
+
 void bfputobrk(BFILE* pf)
 {
   assert(pf); assert(!pf->loading);
@@ -3994,6 +4034,13 @@ void bfputstrn(BFILE* pf, const char *str, size_t n)
   assert(pf); assert(!pf->loading);
   bfile_putkey(pf->pbf, BVT_STR);
   bfile_putstr(pf->pbf, str, n);
+}
+
+void bfputbin(BFILE* pf, const char *str, size_t n)
+{
+  assert(pf); assert(!pf->loading);
+  bfile_putkey(pf->pbf, BVT_BIN);
+  bfile_putbin(pf->pbf, str, n);
 }
 
 

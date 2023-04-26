@@ -416,8 +416,80 @@ void create(int argc, char **argv)
   chbfini(&hcb); fdebfini(&fdeb);
 }
 
+void b2jcopyfield(BFILE *bfp, JFILE *jfp, bool inobj)
+{
+  chbuf_t cb = mkchb();
+  bvtype_t vt;
+  if (inobj) {
+    char *key = bfgetkey(bfp, &cb);
+    jfputkey(jfp, key);
+  }
+  vt = bfpeek(bfp);
+  switch (vt) {
+   case BVT_OBJ: {
+     bfgetobrc(bfp); 
+     jfputobrc(jfp);
+     while (!bfatcbrc(bfp)) b2jcopyfield(bfp, jfp, true);
+     bfgetcbrc(bfp); 
+     jfputcbrc(jfp);
+   } break;
+   case BVT_ARR: {
+     bfgetobrk(bfp); 
+     jfputobrk(jfp);
+     while (!bfatcbrk(bfp)) b2jcopyfield(bfp, jfp, false);
+     bfgetcbrk(bfp); 
+     jfputcbrk(jfp);
+   } break;
+   case BVT_NULL: {
+     bfgetnull(bfp);
+     jfputnull(jfp);
+   } break;
+   case BVT_BOOL: {
+     bool x = bfgetbool(bfp);
+     jfputbool(jfp, x);
+   } break;
+   case BVT_INT32: {
+     int x = bfgetnum(bfp);
+     jfputnum(jfp, x);
+   } break; 
+   case BVT_INT64: {
+     long long x = bfgetnumll(bfp);
+     jfputnumll(jfp, x);
+   } break; 
+   case BVT_FLOAT: {
+     double x = bfgetnumd(bfp);
+     jfputnumd(jfp, x);
+   } break; 
+   case BVT_STR: {
+     char *x = bfgetstr(bfp, &cb);
+     jfputstr(jfp, x);
+   } break; 
+   case BVT_BIN: {
+     bfgetbin(bfp, &cb);
+     jfputstrn(jfp, chbdata(&cb), chblen(&cb));
+   } break; 
+   default:
+     exprintf("unsupported type code: \\x%.2X", vt);
+     assert(false);
+  }
+  chbfini(&cb);
+}
+
 void extract(int argc, char **argv)
 {
+#if 1 /* bson->json test */
+  FILE *fp; JFILE *jfp; BFILE *bfp;
+  if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file %s:", g_arfile);
+  jfp = newjfoi(FILE_poi, stdout);
+  bfp = newbfii(FILE_pii, fp);
+  bfgetobrc(bfp); 
+  jfputobrc(jfp);
+  while (!bfatcbrc(bfp)) b2jcopyfield(bfp, jfp, true);
+  bfgetcbrc(bfp); 
+  jfputcbrc(jfp);
+  freebf(bfp); freejf(jfp);
+  fclose(fp);
+#else /* just a test */  
   FILE *fp; JFILE *jfp; BFILE *bfp;
   chbuf_t cb = mkchb(); char *r; int ir; double dr; bool br;
   if (!(fp = fopen(g_arfile, "wb"))) exprintf("can't open archive file %s:", g_arfile);
@@ -573,6 +645,7 @@ void extract(int argc, char **argv)
   freebf(bfp);
   fclose(fp);
   chbfini(&cb);
+#endif
 }
 
 int main(int argc, char **argv)
