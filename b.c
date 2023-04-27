@@ -4684,3 +4684,57 @@ bool dir(const char *dirpath, dsbuf_t *pdsv)
    return true;
 }
 
+/* opens new tmp file in w+b; it is deleted when file closed or program exits/crashes */
+/* mode should be "w+b" or "w+t" (makes difference on Windows) */
+FILE *etmpopen(const char *mode)
+{
+  FILE *fp = NULL;
+#if defined(_MSC_VER) 
+  /* standard tmpnam is no good; use ours */
+  char *fname, fnbuf[100];
+  int c = 'a';
+  int pid = _getpid(); 
+  int fd = -1;
+  bool text = false;
+  assert(mode);
+  if (mode && strchr(mode, 't')) text = true;
+  for (;;) {
+    sprintf(fnbuf, "cutmp_%c%d", c, pid); 
+    fname = _tempnam(NULL, fnbuf);
+    if (!fname) break;
+    fd = _sopen(fname,
+            _O_CREAT|_O_EXCL|_O_RDWR|
+            (text ? _O_TEXT : _O_BINARY)|
+            _O_TEMPORARY|_O_SHORT_LIVED,
+            _SH_DENYNO,
+            _S_IREAD|_S_IWRITE);
+    if (fd != -1) break;
+    if (errno != EEXIST) break;
+    if (c >= 'z') break; 
+    ++c;
+  }
+  /* shouldn't have problems opening good fd if got enough FILEs */
+  if (fd != -1) fp = _fdopen(fd, mode ? mode : "w+b");
+#else
+  /* linuxes tmpfile fits the bill; let's use it */
+  assert(mode); /* required but ignored: makes no difference here */
+  fp = tmpfile();
+#endif  
+  if (!fp) exprintf("out of temp files");
+  return fp;
+}
+
+/* sets stdin/stdout into binary mode (no-op on Unix) */
+void fbinary(FILE *stdfile)
+{
+  setbmode(stdfile);
+}
+
+/* check that file is a tty */
+bool fisatty(FILE *fp)
+{
+  assert(fp);
+  return isatty(fileno(fp)); 
+}
+
+

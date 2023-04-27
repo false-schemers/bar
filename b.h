@@ -253,6 +253,12 @@ extern bool fsstat(const char *path, fsstat_t *ps);
 
 /* list full dir content as file/dir names */
 extern bool dir(const char *dirpath, dsbuf_t *pdsv);
+/* opens new tmp file in w+b; it is deleted when file closed or program exits/crashes */
+extern FILE *etmpopen(const char *mode);
+/* sets stdin/stdout into binary mode (no-op on Unix) */
+extern void fbinary(FILE *stdfile);
+/* check that file is a tty */
+extern bool fisatty(FILE *fp);
 
 /* simple char input abstraction */
 typedef struct ii_tag {
