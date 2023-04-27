@@ -18,8 +18,11 @@
 /* bar globals */
 char g_cmd = 'h'; /* 't', 'x', 'c', or 'h' */
 const char *g_arfile = NULL; /* archive file name */
-const char *g_dstdir = ".";  /* destination directory */
+const char *g_dstdir = NULL;  /* destination dir or - for stdout */
 const char *g_exfile = NULL; /* excluded glob patterns file name */
+bool g_keepold = false; /* do not owerwrite existing files (-k) */
+int g_integrity = 0; /* check/calc integrity hashes; 1=SHA256 */
+char g_format = 0; /* 'b': BAR, 't': ASAR, 0: check extension */
 dsbuf_t g_expats; /* list of excluded patterns */
 
 void init_archiver(void)
@@ -63,7 +66,6 @@ fdent_t* fdeinit(fdent_t* mem)
   memset(mem, 0, sizeof(fdent_t));
   fdebinit(&mem->files);
   dsinit(&mem->name);
-  dsinit(&mem->integrity_algorithm);
   dsinit(&mem->integrity_hash);
   dsbinit(&mem->integrity_blocks);
   return mem;
@@ -73,7 +75,6 @@ void fdefini(fdent_t* pe)
 {
   fdebfini(&pe->files);
   dsfini(&pe->name);
-  dsfini(&pe->integrity_algorithm);
   dsfini(&pe->integrity_hash);
   dsbfini(&pe->integrity_blocks);
 }
@@ -134,6 +135,7 @@ void parse_header_files_json(JFILE *jfp, const char *base, fdebuf_t *pfdb)
         pfde->isdir = true;
         parse_header_files_json(jfp, nbase, &pfde->files);
       } else if (streql(key, "offset")) { 
+        /* NB: asar string (js exact num range is 53 bits) */
         char *soff = jfgetstr(jfp, &kcb);
         pfde->offset = strtoull(soff, NULL, 10);
       } else if (streql(key, "size")) { 
@@ -147,16 +149,21 @@ void parse_header_files_json(JFILE *jfp, const char *base, fdebuf_t *pfdb)
         while (!jfatcbrc(jfp)) {
           key = jfgetkey(jfp, &kcb);
           if (streql(key, "algorithm")) {
-            pfde->integrity_algorithm = exstrdup(jfgetstr(jfp, &kcb));
+            char *ia = jfgetstr(jfp, &kcb);
+            pfde->integrity_algorithm = streql(ia, "SHA256");
           } else if (streql(key, "hash")) {
-            pfde->integrity_hash = exstrdup(jfgetstr(jfp, &kcb));
+            char *hash = jfgetbin(jfp, &kcb);
+            if (pfde->integrity_algorithm == 1 && chblen(&kcb) == 32)
+              pfde->integrity_hash = exmemdup(hash, 32);
           } else if (streql(key, "blockSize")) {
             pfde->integrity_block_size = (unsigned long)jfgetnumull(jfp); 
           } else if (streql(key, "blocks")) {
             jfgetobrk(jfp);
             while (!jfatcbrk(jfp)) {
               char *block = jfgetstr(jfp, &kcb);
-              dsbpushbk(&pfde->integrity_blocks, &block);
+              if (pfde->integrity_algorithm == 1 && chblen(&kcb) == 32) {
+                *dsbnewbk(&pfde->integrity_blocks) = exmemdup(block, 32);
+              }  
             }
             jfgetcbrk(jfp);
           }
@@ -203,20 +210,21 @@ void unparse_header_files_json(JFILE *jfp, fdebuf_t *pfdb)
         jfputbool(jfp, true); 
       } else {      
         jfputkey(jfp, "offset");
+        /* NB: asar string (js exact num range is 53 bits) */
         jfputstr(jfp, chbsetf(&cb, "%llu", pfde->offset)); 
       }
       if (pfde->executable) { 
         jfputkey(jfp, "executable"); 
         jfputbool(jfp, true); 
       }
-      if (pfde->integrity_algorithm) {
+      if (pfde->integrity_algorithm == 1/*SHA256*/) {
         jfputkey(jfp, "integrity"); 
         jfputobrc(jfp);
         jfputkey(jfp, "algorithm"); 
-        jfputstr(jfp, pfde->integrity_algorithm);
+        jfputstr(jfp, "SHA256");
         if (pfde->integrity_hash) {
           jfputkey(jfp, "hash"); 
-          jfputstr(jfp, pfde->integrity_hash);
+          jfputbin(jfp, pfde->integrity_hash, 32);
         }
         if (pfde->integrity_block_size) {
           size_t k;
@@ -226,7 +234,7 @@ void unparse_header_files_json(JFILE *jfp, fdebuf_t *pfdb)
           jfputobrk(jfp);
           for (k = 0; k < dsblen(&pfde->integrity_blocks); ++k) {
             dstr_t *pds = dsbref(&pfde->integrity_blocks, k);
-            jfputstr(jfp, *pds);
+            jfputbin(jfp, *pds, 32);
           }
           jfputcbrk(jfp);
         }
@@ -262,20 +270,20 @@ void unparse_header_files_bson(BFILE *bfp, fdebuf_t *pfdb)
         bfputbool(bfp, true); 
       } else {      
         bfputkey(bfp, "offset");
-        bfputstr(bfp, chbsetf(&cb, "%llu", pfde->offset)); 
+        bfputnumull(bfp, pfde->offset);
       }
       if (pfde->executable) { 
         bfputkey(bfp, "executable"); 
         bfputbool(bfp, true); 
       }
-      if (pfde->integrity_algorithm) {
+      if (pfde->integrity_algorithm == 1/*SHA256*/) {
         bfputkey(bfp, "integrity"); 
         bfputobrc(bfp);
         bfputkey(bfp, "algorithm"); 
-        bfputstr(bfp, pfde->integrity_algorithm);
+        bfputnum(bfp, pfde->integrity_algorithm);
         if (pfde->integrity_hash) {
           bfputkey(bfp, "hash"); 
-          bfputstr(bfp, pfde->integrity_hash);
+          bfputbin(bfp, pfde->integrity_hash, 32);
         }
         if (pfde->integrity_block_size) {
           size_t k;
@@ -285,7 +293,7 @@ void unparse_header_files_bson(BFILE *bfp, fdebuf_t *pfdb)
           bfputobrk(bfp);
           for (k = 0; k < dsblen(&pfde->integrity_blocks); ++k) {
             dstr_t *pds = dsbref(&pfde->integrity_blocks, k);
-            bfputstr(bfp, *pds);
+            bfputbin(bfp, *pds, 32);
           }
           bfputcbrk(bfp);
         }
@@ -360,7 +368,24 @@ void list(void)
   fclose(fp);
 }
 
-void addfde(const char *path, fdebuf_t *pfdeb)
+
+/* copy file via fread/fwrite */
+size_t fcopy(FILE *ifp, FILE *ofp)
+{
+  char buf[BUFSIZ];
+  size_t bc = 0;
+  assert(ifp); assert(ofp);
+  for (;;) {
+    size_t n = fread(buf, 1, BUFSIZ, ifp);
+    if (!n) break;
+    fwrite(buf, 1, n, ofp);
+    bc += n;
+    if (n < BUFSIZ) break;
+  }
+  return bc;
+}
+
+uint64_t addfde(uint64_t off, const char *path, fdebuf_t *pfdeb)
 {
   fsstat_t st;
   if (fsstat(path, &st) && (st.isdir || st.isreg)) {
@@ -368,7 +393,7 @@ void addfde(const char *path, fdebuf_t *pfdeb)
     fdent_t *pfde = fdebnewbk(pfdeb);
     pfde->name = exstrdup(fname);
     pfde->isdir = st.isdir;
-    pfde->size = st.size;  
+    pfde->size = st.size;
     if (excluded(path)) {
       pfde->unpacked = true;
     } else {
@@ -380,18 +405,25 @@ void addfde(const char *path, fdebuf_t *pfdeb)
           for (i = 0; i < dsblen(&dsb); ++i) {
             dstr_t *pds = dsbref(&dsb, i);
             if (streql(*pds, ".") || streql(*pds, "..")) continue;
-            addfde(chbsetf(&cb, "%s/%s", path, *pds), pfdeb);
+            off = addfde(off, chbsetf(&cb, "%s/%s", path, *pds), &pfde->files);
           }
         } else {
           exprintf("can't open directory: %s", path);
         }
         dsbfini(&dsb);
         chbfini(&cb);
+      } else {
+        pfde->offset = off;
+        off += pfde->size;
+        if (g_integrity) {
+          //...
+        }
       }
     }
   } else {
     exprintf("can't stat file or directory: %s", path);
   }
+  return off;
 }
 
 void create(int argc, char **argv)
@@ -402,7 +434,7 @@ void create(int argc, char **argv)
   fdebinit(&fdeb);
   for (i = 0; i < argc; ++i) {
     /* NB: we don't care where file/dir arg is located */
-    addfde(argv[i], &fdeb);
+    addfde(0, argv[i], &fdeb);
   }
   list_fdebuf(NULL, &fdeb, stdout, getverbosity() > 0);
   jfp = newjfoi(FILE_poi, stdout);
@@ -466,7 +498,7 @@ void b2jcopyfield(BFILE *bfp, JFILE *jfp, bool inobj)
    } break; 
    case BVT_BIN: {
      bfgetbin(bfp, &cb);
-     jfputstrn(jfp, chbdata(&cb), chblen(&cb));
+     jfputbin(jfp, chbdata(&cb), chblen(&cb));
    } break; 
    default:
      exprintf("unsupported type code: \\x%.2X", vt);
@@ -654,13 +686,17 @@ int main(int argc, char **argv)
 
   setprogname(argv[0]);
   setusage
-    ("[OPTION]... [FILE]...\n"
+    ("[OPTION]... [FILE/DIR]...\n"
      "The archiver works with .asar (json header) and .bar (bson header) archives.\n"
      "\n"
      "Examples:\n"
      "  bar -cf archive.bar foo bar  # Create archive.bar from files foo and bar\n"
      "  bar -tvf archive.bar         # List all files in archive.bar verbosely\n"
+     "  bar -xf archive.bar foo bar  # Extract files foo and bar from archive.bar\n"
      "  bar -xf archive.bar          # Extract all files from archive.bar\n"
+     "\n"
+     "If a long option shows an argument as mandatory, then it is mandatory\n"
+     "for the equivalent short option also.  Similarly for optional arguments.\n"     
      "\n"
      "Main operation mode:\n"
      "  -c, --create                 Create a new archive\n"
@@ -668,24 +704,34 @@ int main(int argc, char **argv)
      "  -x, --extract                Extract files from an archive\n"
      "\n"
      "Operation modifiers:\n"
-     "  -f, --file=FILE              Use archive FILE\n"
+     "  -f, --file=FILE              Use archive FILE (required in all modes)\n"
+     "  -k, --keep-old-files         Don't overwrite existing files when extracting\n"
      "  -C, --directory=DIR          Use directory DIR for extracted files\n"
+     "  -O, --to-stdout              Extract files to standard output\n"
      "  -X, --exclude-from=FILE      Exclude files via globbing patterns in FILE\n"
-     "  --exclude=\"PATTERN\"        Exclude files, given as a globbing PATTERN\n"
+     "  --exclude=\"PATTERN\"          Exclude files, given as a globbing PATTERN\n"
+     "  --integrity=SHA256           Calculate or check file integrity info\n"
+     "\n"
+     "Archive format selection:\n"
+     "  -o, --format=asar            Create asar archive even if extension is not .asar\n"
+     "  --format=bar                 Create bar archive even if extension is .asar\n"
      "\n"
      "Informative output:\n"
      "  -v, --verbose                Increase output verbosity\n"
      "  -q, --quiet                  Suppress logging\n"
      "  -h, --help                   Print this help, then exit\n");
      
-  while ((opt = egetopt(argc, argv, "ctxf:X:C:wvqh-:")) != EOF) {
+  while ((opt = egetopt(argc, argv, "ctxf:kC:OX:owvqh-:")) != EOF) {
     switch (opt) {
       case 'c': g_cmd = 'c'; break;
       case 't': g_cmd = 't'; break;
       case 'x': g_cmd = 'x'; break;
       case 'f': g_arfile = eoptarg; break;
+      case 'k': g_keepold = true; break;
       case 'C': g_dstdir = eoptarg; break;
+      case 'O': g_dstdir = "-"; break;
       case 'X': g_exfile = eoptarg; break;
+      case 'o': g_format = 't'; break;
       case 'w': setwlevel(3); break;
       case 'v': incverbosity(); break;
       case 'q': incquietness(); break;
@@ -696,12 +742,17 @@ int main(int argc, char **argv)
         else if (streql(eoptarg, "list")) g_cmd = 't';
         else if (streql(eoptarg, "extract")) g_cmd = 'x';
         else if ((arg = strprf(eoptarg, "file=")) != NULL) g_arfile = arg;
+        else if (streql(eoptarg, "keep-old-files")) g_keepold = true;
         else if ((arg = strprf(eoptarg, "directory=")) != NULL) g_dstdir = arg;
         else if ((arg = strprf(eoptarg, "exclude-from=")) != NULL) g_exfile = arg;
         else if ((arg = strprf(eoptarg, "exclude=")) != NULL) dsbpushbk(&g_expats, &arg);
         else if (streql(eoptarg, "verbose")) incverbosity();
         else if (streql(eoptarg, "quiet")) incquietness();
         else if (streql(eoptarg, "help")) g_cmd = 'h';
+        else if (streql(eoptarg, "integrity=SHA256")) g_integrity = 1;
+        else if (streql(eoptarg, "old-archive")) g_format = 't';
+        else if (streql(eoptarg, "format=asar")) g_format = 't';
+        else if (streql(eoptarg, "format=bar")) g_format = 'b';
         else eusage("illegal option: --%s", eoptarg);  
       } break;
     }
@@ -712,14 +763,14 @@ int main(int argc, char **argv)
   switch (g_cmd) {
     case 't': {
       if (!g_arfile) eusage("-f FILE argument is missing");
-      if (!streql(g_dstdir, ".")) eusage("-C option is ignored in listing mode");
-      if (g_exfile) eusage("-X option is ignored in listing mode");
+      if (g_dstdir) eusage("unexpected -C/-O options in create mode");
+      if (g_exfile) eusage("unexpected -X option in listing mode");
       if (eoptind < argc) eusage("too many arguments for list command");
       list();
     } break;
     case 'c': {
       if (!g_arfile) eusage("-f FILE argument is missing");
-      if (!streql(g_dstdir, ".")) eusage("-C option is ignored in create mode");
+      if (g_dstdir) eusage("unexpected -C/-O options in create mode");
       if (g_exfile) loadex();
       create(argc-eoptind, argv+eoptind);
     } break;

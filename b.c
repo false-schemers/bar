@@ -86,6 +86,13 @@ char *exstrndup(const char* s, size_t n)
   return t;
 }
 
+char *exmemdup(const char* s, size_t n)
+{
+  char *t = (char *)exmalloc(n);
+  memcpy(t, s, n);
+  return t;
+}
+
 char *strtrc(char* str, int c, int toc)
 {
   char *s;
@@ -2684,6 +2691,20 @@ static char* jfile_tstring(jfile_t* pjf, chbuf_t* pcb)
   return chbdata(pcb);
 }
 
+/* decode lookahead string token as hex sequence into pcb */
+static char* jfile_tbin(jfile_t* pjf, chbuf_t* pcb)
+{
+  char *ts; int32_t c32h = 0;
+  assert(pjf->tt == JTK_STRING);
+  chbclear(pcb);
+  ts = chbdata(&pjf->tbuf);
+  /* convert hex pairs to bytes */
+  assert(*ts == '\"');
+  hexdecode(ts+1, pcb); /* stops at " */
+  if (1+chblen(pcb)*2+1 != chblen(&pjf->tbuf)) jfile_ierr(pjf, "hex sequence error");
+  /* note: pcb may legally contain zeroes! */
+  return chbdata(pcb);
+}
 
 /* encode utf-8 string of length n into token buf */
 static void jfile_tunstring(jfile_t* pjf, const char *str, size_t n)
@@ -2742,6 +2763,16 @@ static void jfile_tunstring(jfile_t* pjf, const char *str, size_t n)
     }
     n -= (size_t)(end-str); str = end;
   }
+  chbputc('\"', pcb);
+}
+
+/* encode binary sequence of length n into token buf as string */
+static void jfile_tunbin(jfile_t* pjf, const void *mem, size_t n)
+{
+  chbuf_t *pcb = &pjf->tbuf;
+  chbclear(pcb);
+  hexnencode(mem, n, pcb);
+  chbinsc(pcb, 0, '\"');
   chbputc('\"', pcb);
 }
 
@@ -3231,6 +3262,29 @@ char* jfgetstr(JFILE* pf, chbuf_t* pcb)
   /* out states: S_AFTER_VALUE */
 }
 
+char* jfgetbin(JFILE* pf, chbuf_t* pcb)
+{
+  /* legal in states: S_AFTER_VALUE S_AT_VALUE */
+  jtoken_t t; char *s;
+  assert(pf); assert(pcb);
+  assert(pf->loading);
+  if (pf->state == S_AFTER_VALUE) {
+    t = jfile_peekt(pf->pjf);
+    if (t == JTK_COMMA) {
+      jfile_dropt(pf->pjf);
+      pf->state = S_AT_VALUE;
+    }
+  }
+  if (pf->state != S_AT_VALUE) jferror(pf, "no value ahead");
+  t = jfile_peekt(pf->pjf);
+  if (t != JTK_STRING) jferror(pf, "string expected");
+  s = jfile_tbin(pf->pjf, pcb);
+  jfile_dropt(pf->pjf);
+  pf->state = S_AFTER_VALUE;
+  return s;
+  /* out states: S_AFTER_VALUE */
+}
+
 void jfputobrk(JFILE* pf) /* [ */
 {
   jfile_t* pjf;
@@ -3375,6 +3429,19 @@ void jfputstrn(JFILE* pf, const char *str, size_t n) /* "str" */
   if (pf->state == S_AT_OBRK) jfile_indent(pjf, 0); 
   else if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, ',');
   jfile_tunstring(pjf, str, n);
+  jfile_putt(pjf);
+  pf->state = S_AFTER_VALUE;
+}
+
+void jfputbin(JFILE* pf, const void *mem, size_t n) /* "hexbin" */
+{
+  jfile_t* pjf;
+  assert(pf); assert(!pf->loading);
+  assert(mem);
+  pjf = pf->pjf;
+  if (pf->state == S_AT_OBRK) jfile_indent(pjf, 0); 
+  else if (pf->state == S_AFTER_VALUE) jfile_indent(pjf, ',');
+  jfile_tunbin(pjf, mem, n);
   jfile_putt(pjf);
   pf->state = S_AFTER_VALUE;
 }
@@ -3606,7 +3673,7 @@ static uint64_t bfile_geti64(bfile_t* pbf)
   uint8_t b[8]; unsigned n; uint64_t v;
   if (pbf->dvt == BVT_ARR) bfile_getkey(pbf);
   n = pbf->read(b, 1, 8, pbf->pfile);
-  if (pbf->kvt != BVT_INT32 || n != 8) bfile_ierr(pbf, "int64 expected");
+  if (pbf->kvt != BVT_INT64 || n != 8) bfile_ierr(pbf, "int64 expected");
   v = ((uint64_t)b[7] << 56) | ((uint64_t)b[6] << 48) 
     | ((uint64_t)b[5] << 40) | ((uint64_t)b[4] << 32) 
     | ((uint64_t)b[3] << 24) | ((uint64_t)b[2] << 16) 
@@ -4041,6 +4108,244 @@ void bfputbin(BFILE* pf, const char *str, size_t n)
   assert(pf); assert(!pf->loading);
   bfile_putkey(pf->pbf, BVT_BIN);
   bfile_putbin(pf->pbf, str, n);
+}
+
+/* hex string converters */
+
+char* hexencode(const char *s, chbuf_t* pcb)
+{
+  assert(s);
+  assert(pcb);
+  chbclear(pcb);
+  while (*s) {
+    unsigned hl = (int)*s++;
+    unsigned h = (hl >> 4) & 0x0f;
+    unsigned l = hl & 0x0f;
+    chbputc((h < 10) ? '0' + h : 'a' + (h-10), pcb);
+    chbputc((l < 10) ? '0' + l : 'a' + (l-10), pcb);
+  }
+  return chbdata(pcb);
+}
+
+/* encodes n bytes of s into pcb using [0-9a-f] alphabet */
+char* hexnencode(const char *s, size_t n, chbuf_t* pcb)
+{
+  size_t i;
+  assert(s);
+  assert(pcb);
+  chbclear(pcb);
+  for (i = 0; i < n; ++i) {
+    unsigned hl = (int)s[i];
+    unsigned h = (hl >> 4) & 0xF;
+    unsigned l = hl & 0xF;
+    chbputc((h < 10) ? '0' + h : 'a' + (h-10), pcb);
+    chbputc((l < 10) ? '0' + l : 'a' + (l-10), pcb);
+  }
+  return chbdata(pcb);
+}
+
+/* ignores '-' and white space, returns NULL on errors; use cb length for binary data */
+char* hexdecode(const char *s, chbuf_t* pcb)
+{
+  int hexu[256] = {
+   -4,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -1,  -1,  -2,  -1,  -1,  -2,  -2,
+   -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -1,  -2,  -4,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -1,  -2,  -2,
+    0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  10,  11,  12,  13,  14,  15,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  10,  11,  12,  13,  14,  15,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+   -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,
+  };
+  assert(s);
+  assert(pcb);
+  chbclear(pcb);
+  for (;;) {
+    int b = 0, h, l, c;
+    do { c = *s++; h = hexu[c & 0xff]; } while (h == -1); /* skip spaces and - */
+    assert(h == -4 || h == -2 || (h >= 0 && h <= 15));
+    if (h == -4) break; /* legal eos: 0 or \" */
+    else if (h == -2) return NULL; /* error if invalid */
+    b |= h << 4;
+    do { c = *s++; l = hexu[c & 0xff]; } while (l == -1); /* skip spaces and - */
+    assert(l == -4 || l == -2 || (l >= 0 && l <= 15));
+    if (l == -4 || l == -2) return NULL; /* error if eos or invalid */
+    b |= l;
+    chbputc(b & 0xff, pcb);
+  }
+  return chbdata(pcb);
+}
+
+
+/* sha256 -- avp */
+
+#define BLOCK_SIZE 64 /* should be the same as the size of x field in context */
+
+void sha256init(sha256ctx_t *ctx)
+{
+  assert(sizeof(ctx->x)/sizeof(ctx->x[0]) == BLOCK_SIZE);
+  ctx->h[0] = 0x6A09E667;
+  ctx->h[1] = 0xBB67AE85;
+  ctx->h[2] = 0x3C6EF372;
+  ctx->h[3] = 0xA54FF53A;
+  ctx->h[4] = 0x510E527F;
+  ctx->h[5] = 0x9B05688C;
+  ctx->h[6] = 0x1F83D9AB;
+  ctx->h[7] = 0x5BE0CD19;
+  ctx->x_len = 0;
+  ctx->len = 0;
+}
+
+static size_t update_block(sha256ctx_t *ctx, uint8_t *p, size_t len)
+{
+  static const uint32_t magik[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+    0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+    0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+    0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+    0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+    0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  };
+  size_t lx;
+  uint32_t w[64];
+  uint32_t h0 = ctx->h[0];
+  uint32_t h1 = ctx->h[1];
+  uint32_t h2 = ctx->h[2];
+  uint32_t h3 = ctx->h[3];
+  uint32_t h4 = ctx->h[4];
+  uint32_t h5 = ctx->h[5];
+  uint32_t h6 = ctx->h[6];
+  uint32_t h7 = ctx->h[7];
+
+  for (lx = 0; lx + BLOCK_SIZE <= len; lx += BLOCK_SIZE, p += BLOCK_SIZE) {
+    int i, j;
+    uint32_t a, b, c, d, e, f, g, h;
+    for (i = j = 0; i < 16; i++, j+= 4) {
+      w[i] = ((uint32_t)p[j]) << 24 |
+	     ((uint32_t)p[j+1]) << 16 |
+	     ((uint32_t)p[j+2]) << 8 |
+	     ((uint32_t)p[j+3]);
+    }
+    for (i = 16; i < 64; i++) {
+      uint32_t t1 = (w[i-2]>>17 | w[i-2]<<(32-17)) ^
+	            (w[i-2]>>19 | w[i-2]<<(32-19)) ^
+	            (w[i-2] >> 10);
+      uint32_t t2 = (w[i-15]>>7 | w[i-15]<<(32-7)) ^
+                    (w[i-15]>>18 | w[i-15]<<(32-18)) ^
+                    (w[i-15] >> 3);
+      w[i] = t1 + w[i-7] + t2 + w[i-16];
+    }
+    a = h0; b = h1; c = h2; d = h3; e = h4; f = h5; g = h6; h = h7;
+    for (i = 0; i < 64; i++) {
+      uint32_t t1 = h + ((e>>6 | e<<(32-6)) ^
+			 (e>>11 | e<<(32-11)) ^
+			 (e>>25 | e<<(32-25))) +
+	          ((e & f) ^ (~e & g)) +
+ 	           magik[i] + w[i];
+      uint32_t t2 = ((a>>2 | a<<(32-2)) ^ (a>>13 | a<<(32-13)) ^ (a>>22 | a<<(32-22))) +
+ 	            ((a & b) ^ (a & c) ^ (b & c));
+      h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    h0 += a; h1 += b; h2 += c; h3 += d; h4 += e; h5 += f; h6 += g; h7 += h;
+  }
+  ctx->h[0] = h0;
+  ctx->h[1] = h1;
+  ctx->h[2] = h2;
+  ctx->h[3] = h3;
+  ctx->h[4] = h4;
+  ctx->h[5] = h5;
+  ctx->h[6] = h6;
+  ctx->h[7] = h7;
+
+  return lx;
+}
+
+void sha256update(sha256ctx_t *ctx, const void *mem, size_t len)
+{
+  uint8_t *pp = (uint8_t *)mem;
+  size_t lx;
+
+  ctx->len += len;
+  if (ctx->x_len > 0) {
+    lx = len;
+    if (lx > BLOCK_SIZE - ctx->x_len) {
+      lx = BLOCK_SIZE - ctx->x_len;
+    }
+    memcpy(ctx->x + ctx->x_len, pp, lx);
+    ctx->x_len += lx;
+    if (ctx->x_len == BLOCK_SIZE) {
+      update_block(ctx, ctx->x, BLOCK_SIZE);
+      ctx->x_len = 0;
+    }
+    pp += lx;
+    len -= lx;
+  }
+  lx = update_block(ctx, pp, len);
+  if (lx < len) {
+    memcpy(ctx->x, pp + lx, len - lx);
+    ctx->x_len = len - lx;
+  }
+}
+
+void sha256fini(sha256ctx_t *ctx, uint8_t digest[SHA256DG_SIZE])
+{
+  sha256ctx_t d = *ctx;
+  uint8_t tmp[64];
+  uint64_t len = d.len << 3;
+  int i, j;
+
+  memset(tmp, 0, sizeof(tmp));
+  tmp[0] = 0x80;
+
+  if (d.len % 64 < 56) {
+    sha256update(&d, tmp, 56 - d.len % 64);
+  } else {
+    sha256update(&d, tmp, 64 + 56 - d.len % 64);
+  }
+  for (i = 0; i < 8; i++) {
+    tmp[i] = (uint8_t)(len >> (56 - 8 * i));
+  }
+  sha256update(&d, tmp, 8);
+
+  assert(d.x_len == 0);
+  for (j = i = 0; i < 8; i++) {
+    digest[j++] = (uint8_t)(d.h[i] >> 24);
+    digest[j++] = (uint8_t)(d.h[i] >> 16);
+    digest[j++] = (uint8_t)(d.h[i] >> 8);
+    digest[j++] = (uint8_t)(d.h[i]);
+  }
+  memset(ctx, 0, sizeof(sha256ctx_t));
+}
+
+char *memsha256(const void *mem, size_t len, chbuf_t *pcb)
+{
+  sha256ctx_t context;
+  uint8_t digest[SHA256DG_SIZE];
+  const char *ds = (const char *)digest;
+  char *res = NULL;
+  assert(mem); assert(pcb);
+  sha256init(&context);
+  sha256update(&context, (const uint8_t*)mem, len);
+  sha256fini(&context, digest);
+  return chbset(pcb, ds, SHA256DG_SIZE);
 }
 
 

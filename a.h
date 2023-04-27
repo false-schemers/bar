@@ -9,14 +9,14 @@ typedef struct fdent {
   /* dir fields */
   buf_t files;
   /* file fields */
-  unsigned long long offset;
-  unsigned long long size;
+  uint64_t offset;
+  uint64_t size;
   bool executable;
   bool unpacked;
-  dstr_t integrity_algorithm;
-  dstr_t integrity_hash;
-  unsigned long integrity_block_size;
-  dsbuf_t integrity_blocks;
+  int integrity_algorithm; /* 0=none, 1=SHA256 */
+  dstr_t integrity_hash; /* 32 bytes for SHA256 */
+  uint32_t integrity_block_size; /* 0x400000 */
+  dsbuf_t integrity_blocks; /* 32 bytes x N */
 } fdent_t;
 
 extern fdent_t* fdeinit(fdent_t* mem);

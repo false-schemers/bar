@@ -45,6 +45,7 @@ extern void *excalloc(size_t n, size_t s);
 extern void *exrealloc(void *m, size_t n);
 extern char *exstrdup(const char *s);
 extern char *exstrndup(const char* s, size_t n);
+extern char *exmemdup(const char* s, size_t n);
 extern char *strtrc(char *str, int c, int toc);
 extern char *strprf(const char *str, const char *prefix);
 extern char *strsuf(const char *str, const char *suffix);
@@ -137,6 +138,7 @@ extern void dsbfini(dsbuf_t* pb);
 extern void dsbclear(dsbuf_t* pb);
 #define dsblen(pb) (buflen(pb))
 #define dsbref(pb, i) ((dstr_t*)bufref(pb, i))
+#define dsbnewbk(pb) ((dstr_t*)(bufnewbk(pb)))
 #define dsbpushbk(pb, pds) (dsicpy(bufnewbk(pb), pds))
 #define dsbrem(pb, i) do { dsbuf_t *_pb = pb; size_t _i = i; dsfini(bufref(_pb, _i)); bufrem(_pb, _i); } while(0)
 #define dsbqsort(pb) (bufqsort(pb, dstr_cmp))
@@ -347,7 +349,8 @@ extern bool jfgetbool(JFILE* pf); /* true/false */
 extern long long jfgetnumll(JFILE* pf); /* num as long long */
 extern unsigned long long jfgetnumull(JFILE* pf); /* num as unsigned long long */
 extern double jfgetnumd(JFILE* pf); /* num as double */
-extern char* jfgetstr(JFILE* pf, chbuf_t* pcb);
+extern char* jfgetstr(JFILE* pf, chbuf_t* pcb); /* "str" */
+extern char* jfgetbin(JFILE* pf, chbuf_t* pcb); /* "hexbin" as bytes */
 
 /* output operations */
 extern void jfputobrk(JFILE* pf); /* [ */
@@ -365,6 +368,7 @@ extern void jfputnumull(JFILE* pf, unsigned long long num); /* num as unsigned l
 extern void jfputnumd(JFILE* pf, double num); /* num as double */
 extern void jfputstr(JFILE* pf, const char *str); /* "str" */
 extern void jfputstrn(JFILE* pf, const char *str, size_t n); /* "str" */
+extern void jfputbin(JFILE* pf, const void *mem, size_t n); /* "hexbin" */
 extern void jfflush(JFILE* pf);
 
 /* bson i/o "file" */
@@ -432,3 +436,24 @@ extern void bfputstr(BFILE* pf, const char *str); /* "str" */
 extern void bfputstrn(BFILE* pf, const char *str, size_t n); /* "str" */
 extern void bfputbin(BFILE* pf, const char *str, size_t n); /* binary */
 
+/* hex string converters */
+extern char *hexencode(const char *s, chbuf_t* pcb); /* -> [0-9a-f]* */
+extern char *hexnencode(const char *s, size_t n, chbuf_t* pcb); /* -> [0-9a-f]* */
+/* returns NULL on err, whitespace and - ignored, use cblen(pcb) for binary data */
+extern char *hexdecode(const char *s, chbuf_t* pcb);
+
+/* sha256 digests */
+typedef struct sha256ctx_tag {
+  uint32_t h[8];
+  uint8_t x[64];
+  size_t x_len;
+  uint64_t len;
+} sha256ctx_t;
+/* incremental calculation of sha256 digest */
+#define SHA256DG_SIZE (32)
+#define SHA256DG_HEXCHARS (64)
+#define SHA256DG_B64CHARS (44)
+extern void sha256init(sha256ctx_t *ctx);
+extern void sha256update(sha256ctx_t *ctx, const void *mem, size_t len);
+extern void sha256fini(sha256ctx_t *ctx, uint8_t digest[SHA256DG_SIZE]);
+extern char *memsha256(const void *mem, size_t len, chbuf_t *pcb);
