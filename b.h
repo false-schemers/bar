@@ -136,6 +136,7 @@ typedef buf_t dsbuf_t;
 extern void dsbicpy(dsbuf_t* mem, const dsbuf_t* pb);
 extern void dsbfini(dsbuf_t* pb);
 extern void dsbclear(dsbuf_t* pb);
+#define dsbempty(pb) (bufempty(pb))
 #define dsblen(pb) (buflen(pb))
 #define dsbref(pb, i) ((dstr_t*)bufref(pb, i))
 #define dsbnewbk(pb) ((dstr_t*)(bufnewbk(pb)))

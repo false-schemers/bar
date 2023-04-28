@@ -42,13 +42,13 @@ void fini_archiver(void)
   free(g_buffer);
 }
 
-void addex(dsbuf_t *pdsb, const char *arg)
+void addpat(dsbuf_t *pdsb, const char *arg)
 {
   chbuf_t cb = mkchb(); char *pat; 
   size_t len = strlen(arg);
   if (len > 0 && arg[len-1] == '/') --len;
   pat = chbset(&cb, arg, len); 
-  dsbpushbk(&g_expats, &pat);
+  dsbpushbk(pdsb, &pat);
   chbfini(&cb);
 }
 
@@ -60,13 +60,13 @@ void loadex(void)
   while ((line = fgetlb(&cb, fp)) != NULL) {
     line = strtrim(line);
     if (*line == 0 || *line == '#') continue;
-    addex(&g_expats, line);
+    addpat(&g_expats, line);
   }
   fclose(fp);
   chbfini(&cb);
 }
 
-bool excluded(const char *base, const char *fname, dsbuf_t *pdsb)
+bool matchpats(const char *base, const char *fname, dsbuf_t *pdsb)
 {
   size_t i;
   for (i = 0; i < dsblen(pdsb); ++i) {
@@ -286,7 +286,7 @@ uint32_t read_header(FILE *fp, fdebuf_t *pfdb)
     if (x != asz) exprintf("%s: invalid asar archive header [2]", g_arfile);
     x += 4;
     if (x != off) exprintf("%s: invalid asar archive header [1]", g_arfile); 
-    off += 8; /* from the start of the file */
+    off += 12; /* from the start of the file */
     /* header starts right after 4-word signature */
     jfp = newjfii(FILE_pii, fp);
     jfgetobrc(jfp);
@@ -303,7 +303,7 @@ uint32_t read_header(FILE *fp, fdebuf_t *pfdb)
     asz = unpack_uint32_le(hbuf+8);  
     ssz = 0;
     if (asz != off) exprintf("%s: invalid bsar archive header [1]", g_arfile);
-    off += 6; /* from the start of the file */
+    off += 12; /* from the start of the file */
     /* header starts right after 3-word signature */
     bfp = newbfii(FILE_pii, fp);
     bfgetobrc(bfp);
@@ -461,9 +461,10 @@ void write_header(int format, fdebuf_t *pfdb, FILE *fp)
   }
   /* write header data to fp */
   ssz = (uint32_t)chblen(&hcb);
-  asz = ssz + 4; if (asz % 4 > 0) asz += 4 - (asz % 4); /* align to 32 bit */
   if (format == 'a') { /* asar, 4-word signature */
     psz = 4; 
+    asz = ssz + 4; /* add at least 4 bytes */ 
+    if (asz % 4 > 0) asz += 4 - (asz % 4); /* align to 32 bit */
     off = sizeof(ssz) + asz; /* offset from the end of asz */
     pack_uint32_le(psz, hbuf);
     pack_uint32_le(off, hbuf+4);  
@@ -471,6 +472,8 @@ void write_header(int format, fdebuf_t *pfdb, FILE *fp)
     pack_uint32_le(ssz, hbuf+12);
   } else { /* bsar, 3-word signature */
     psz = 3;
+    asz = ssz; /* no extra padding */ 
+    if (asz % 4 > 0) asz += 4 - (asz % 4); /* align to 32 bit */
     off = asz; /* offset from the end of asz */
     pack_uint32_le(psz, hbuf);
     pack_uint32_le(off, hbuf+4);  
@@ -520,10 +523,10 @@ void list_header(const char *base, fdebuf_t *pfdb, FILE *pf, bool full)
 
 void list(void)
 {
-  FILE *fp; uint32_t off;
+  FILE *fp; uint32_t hsz;
   fdebuf_t fdeb; fdebinit(&fdeb);
   if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file %s:", g_arfile);
-  off = read_header(fp, &fdeb);
+  hsz = read_header(fp, &fdeb);
   list_header(NULL, &fdeb, stdout, getverbosity() > 0);
   fdebfini(&fdeb);
   fclose(fp);
@@ -542,6 +545,23 @@ size_t fcopy(FILE *ifp, FILE *ofp)
     fwrite(buf, 1, n, ofp);
     bc += n;
     if (n < BUFSIZ) break;
+  }
+  return bc;
+}
+
+/* copy file via fread/fwrite */
+size_t fcopyn(FILE *ifp, FILE *ofp, size_t bytec)
+{
+  char buf[BUFSIZ];
+  size_t bc = 0;
+  assert(ifp); assert(ofp);
+  while (bytec > 0) {
+    size_t c = (bytec < BUFSIZ) ? bytec : BUFSIZ;
+    size_t n = fread(buf, 1, c, ifp);
+    if (!n) break;
+    fwrite(buf, 1, n, ofp);
+    bc += n;
+    bytec -= c;
   }
   return bc;
 }
@@ -592,12 +612,12 @@ uint64_t addfde(uint64_t off, const char *base, const char *path, fdebuf_t *pfde
   if (fsstat(path, &st) && (st.isdir || st.isreg)) {
     char *fname; fdent_t *pfde;
     fname = getfname(path);
-    if (excluded(base, fname, &g_expats)) return off;
+    if (matchpats(base, fname, &g_expats)) return off;
     pfde = fdebnewbk(pfdeb);
     pfde->name = exstrdup(fname);
     pfde->isdir = st.isdir;
     pfde->size = st.size;
-    if (excluded(base, fname, &g_unpats)) {
+    if (matchpats(base, fname, &g_unpats)) {
       pfde->unpacked = true;
     } else {
       if (pfde->isdir) {
@@ -650,68 +670,45 @@ void create(int argc, char **argv)
   fdebfini(&fdeb);
 }
 
-void b2jcopyfield(BFILE *bfp, JFILE *jfp, bool inobj)
+void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppats, FILE *fp)
 {
-  chbuf_t cb = mkchb();
-  bvtype_t vt;
-  if (inobj) {
-    char *key = bfgetkey(bfp, &cb);
-    jfputkey(jfp, key);
-  }
-  vt = bfpeek(bfp);
-  switch (vt) {
-   case BVT_OBJ: {
-     bfgetobrc(bfp); 
-     jfputobrc(jfp);
-     while (!bfatcbrc(bfp)) b2jcopyfield(bfp, jfp, true);
-     bfgetcbrc(bfp); 
-     jfputcbrc(jfp);
-   } break;
-   case BVT_ARR: {
-     bfgetobrk(bfp); 
-     jfputobrk(jfp);
-     while (!bfatcbrk(bfp)) b2jcopyfield(bfp, jfp, false);
-     bfgetcbrk(bfp); 
-     jfputcbrk(jfp);
-   } break;
-   case BVT_NULL: {
-     bfgetnull(bfp);
-     jfputnull(jfp);
-   } break;
-   case BVT_BOOL: {
-     bool x = bfgetbool(bfp);
-     jfputbool(jfp, x);
-   } break;
-   case BVT_INT32: {
-     int x = bfgetnum(bfp);
-     jfputnum(jfp, x);
-   } break; 
-   case BVT_INT64: {
-     long long x = bfgetnumll(bfp);
-     jfputnumll(jfp, x);
-   } break; 
-   case BVT_FLOAT: {
-     double x = bfgetnumd(bfp);
-     jfputnumd(jfp, x);
-   } break; 
-   case BVT_STR: {
-     char *x = bfgetstr(bfp, &cb);
-     jfputstr(jfp, x);
-   } break; 
-   case BVT_BIN: {
-     bfgetbin(bfp, &cb);
-     jfputbin(jfp, chbdata(&cb), chblen(&cb));
-   } break; 
-   default:
-     exprintf("unsupported type code: \\x%.2X", vt);
-     assert(false);
+  size_t i; chbuf_t cb = mkchb();
+  for (i = 0; i < fdeblen(pfdb); ++i) {
+    fdent_t *pfde = fdebref(pfdb, i);
+    dsbuf_t *ppatsi = ppats; const char *sbase;
+    if (!base) sbase = pfde->name;
+    else sbase = chbsetf(&cb, "%s/%s", base, pfde->name);
+    if (matchpats(sbase, pfde->name, &g_expats)) continue;
+    /* ppats == NULL means extract this one and everything below */
+    if (ppatsi && matchpats(sbase, pfde->name, ppatsi)) ppatsi = NULL;
+    if (pfde->isdir) {
+      extract_files(sbase, hsz, &pfde->files, ppatsi, fp);
+    } else if (!ppatsi) {
+      size_t n, fsz = (size_t)pfde->size; fpos_t pos = (fpos_t)hsz + (fpos_t)pfde->offset;
+      verbosef("extracting %s at position 0x%llx, size = %llu\n", 
+        sbase, (unsigned long long)pos, (unsigned long long)fsz);
+#if 0
+      fsetpos(fp, &pos);
+      /* for now, dump to stdout, as if -O is given and g_dstdir == "-" */
+      n = fcopyn(fp, stdout, fsz);
+      if (n != fsz) exprintf("%s: unexpected end of archive", g_arfile);
+#endif
+    }
   }
   chbfini(&cb);
 }
 
 void extract(int argc, char **argv)
 {
-  eusage("NYI: -x");
+  FILE *fp; uint32_t hsz;
+  dsbuf_t pats; fdebuf_t fdeb;
+  dsbinit(&pats); fdebinit(&fdeb);
+  while (argc-- > 0) addpat(&pats, *argv++);
+  if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file %s:", g_arfile);
+  hsz = read_header(fp, &fdeb);
+  extract_files(NULL, hsz, &fdeb, dsbempty(&pats) ? NULL : &pats, fp);
+  fdebfini(&fdeb);
+  fclose(fp);
 }
 
 int main(int argc, char **argv)
@@ -786,8 +783,8 @@ int main(int argc, char **argv)
         else if (streql(eoptarg, "keep-old-files")) g_keepold = true;
         else if ((arg = strprf(eoptarg, "directory=")) != NULL) g_dstdir = arg;
         else if ((arg = strprf(eoptarg, "exclude-from=")) != NULL) g_exfile = arg;
-        else if ((arg = strprf(eoptarg, "exclude=")) != NULL) addex(&g_expats, arg);
-        else if ((arg = strprf(eoptarg, "unpack=")) != NULL) addex(&g_unpats, arg);
+        else if ((arg = strprf(eoptarg, "exclude=")) != NULL) addpat(&g_expats, arg);
+        else if ((arg = strprf(eoptarg, "unpack=")) != NULL) addpat(&g_unpats, arg);
         else if (streql(eoptarg, "verbose")) incverbosity();
         else if (streql(eoptarg, "quiet")) incquietness();
         else if (streql(eoptarg, "help")) g_cmd = 'h';
@@ -799,6 +796,8 @@ int main(int argc, char **argv)
       } break;
     }
   }
+  
+  if (streql(g_dstdir, "-")) fbinary(stdout);
   
   switch (g_cmd) {
     case 't': {
