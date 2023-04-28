@@ -13,7 +13,7 @@
 #include <wchar.h>
 #include "b.h"
 #include "a.h"
-
+#include "r.h"
 
 /* bar globals */
 char g_cmd = 'h'; /* 't', 'x', 'c', or 'h' */
@@ -598,7 +598,7 @@ void writef(const char *path, fdent_t *pfde, FILE *ofp)
   }
   if (g_integrity == 1) {
     pfde->integrity_algorithm = g_integrity;
-    pfde->integrity_block_size = g_bufsize;
+    pfde->integrity_block_size = (uint32_t)g_bufsize;
     sha256init(&fhash);
   }
   for (;;) {
@@ -606,8 +606,8 @@ void writef(const char *path, fdent_t *pfde, FILE *ofp)
     if (g_integrity == 1) {
       sha256init(&bhash);
       sha256update(&bhash, g_buffer, n);
-      sha256fini(&bhash, &digest[0]);
-      *dsbnewbk(&pfde->integrity_blocks) = exmemdup(&digest[0], SHA256DG_SIZE);
+      sha256fini(&bhash, digest);
+      *dsbnewbk(&pfde->integrity_blocks) = exmemdup((char*)&digest[0], SHA256DG_SIZE);
       sha256update(&fhash, g_buffer, n);
     }
     if (!n) break;
@@ -620,8 +620,8 @@ void writef(const char *path, fdent_t *pfde, FILE *ofp)
       (unsigned long long)bc, (unsigned long long)pfde->size);
   }
   if (g_integrity == 1) {
-    sha256fini(&fhash, &digest[0]);
-    pfde->integrity_hash = exmemdup(&digest[0], SHA256DG_SIZE);
+    sha256fini(&fhash, digest);
+    pfde->integrity_hash = exmemdup((char*)&digest[0], SHA256DG_SIZE);
   }
   fclose(ifp);
   chbfini(&cb);
