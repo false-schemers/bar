@@ -23,7 +23,7 @@ int g_wlevel = 0; /* warnings below this level are ignored */
 int g_verbosity = 0; /* how verbose are we? */
 int g_quietness = 0; /* how quiet are we? */
 /* AT&T-like option parser */
-int eoptind = 1; /* start*/
+int eoptind = 1; /* start */
 int eopterr = 1; /* throw errors by default */
 int eoptopt = 0;
 char* eoptarg = NULL;

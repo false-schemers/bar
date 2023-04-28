@@ -784,6 +784,26 @@ int main(int argc, char **argv)
      "\n"
      "Note: when creating archives (-c), only the name of each argument file/dir\n"
      "is stored in the archive, not a complete path to the argument file/dir.\n");
+  
+  if (argc >= 3 && *argv[1] != '-') {
+    /* traditional tar-like usage: cmd archive ... */
+    char *cmd = argv[1];
+    bool gotf = false, gotmode = false; 
+    while (*cmd) switch (*cmd++) {
+      case 'c': g_cmd = 'c'; gotmode = true; break;
+      case 't': g_cmd = 't'; gotmode = true; break;
+      case 'x': g_cmd = 'x'; gotmode = true; break;
+      case 'f': gotf = true; break;
+      case 'o': g_format = 'a'; break;
+      case 'v': incverbosity(); break;
+      default: eusage("unexpected flag in command combo: %c", *--cmd);
+    }
+    if (!gotf || !gotmode) eusage("invalid command combo: %s", argv[1]);
+    /* next argument is archive name */
+    g_arfile = argv[2];
+    /* continue parsing options/args from argv[3] */
+    eoptind = 3;
+  }
      
   while ((opt = egetopt(argc, argv, "ctxf:kC:OX:owvqh-:")) != EOF) {
     switch (opt) {
