@@ -260,6 +260,10 @@ extern FILE *etmpopen(const char *mode);
 extern void fbinary(FILE *stdfile);
 /* check that file is a tty */
 extern bool fisatty(FILE *fp);
+/* long long file positioning */
+extern int fseekll(FILE *fp, long long off, int org);
+extern long long ftellll(FILE *fp);
+
 
 /* simple char input abstraction */
 typedef struct ii_tag {

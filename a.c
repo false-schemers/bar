@@ -19,10 +19,12 @@
 char g_cmd = 'h'; /* 't', 'x', 'c', or 'h' */
 const char *g_arfile = NULL; /* archive file name */
 const char *g_dstdir = NULL;  /* destination dir or - for stdout */
+const char *g_infile = NULL; /* included glob patterns file name */
 const char *g_exfile = NULL; /* excluded glob patterns file name */
 bool g_keepold = false; /* do not owerwrite existing files (-k) */
 int g_integrity = 0; /* check/calc integrity hashes; 1: SHA256 */
 int g_format = 0; /* 'b': BSAR, 'a': ASAR, 0: check extension */
+dsbuf_t g_inpats; /* list of included patterns */
 dsbuf_t g_expats; /* list of excluded patterns */
 dsbuf_t g_unpats; /* list of unpacked patterns */
 size_t g_bufsize = 0x400000;
@@ -30,6 +32,7 @@ char *g_buffer = NULL;
 
 void init_archiver(void)
 {
+  dsbinit(&g_inpats);
   dsbinit(&g_expats);
   dsbinit(&g_unpats);
   g_buffer = exmalloc(g_bufsize);
@@ -37,43 +40,52 @@ void init_archiver(void)
 
 void fini_archiver(void)
 {
+  dsbfini(&g_inpats);
   dsbfini(&g_expats);
   dsbfini(&g_unpats);
   free(g_buffer);
 }
 
-void addpat(dsbuf_t *pdsb, const char *arg)
+#define PAT_LITERAL 1
+#define PAT_ANCHORED 2
+#define PAT_WCMATCHSLASH 4
+
+void addpat(dsbuf_t *pdsb, const char *arg, int flags)
 {
   chbuf_t cb = mkchb(); char *pat; 
   size_t len = strlen(arg);
   if (len > 0 && arg[len-1] == '/') --len;
-  pat = chbset(&cb, arg, len); 
+  chbset(&cb, arg, len);
+  chbinsc(&cb, 0, '0'+flags);
+  pat = chbdata(&cb); 
   dsbpushbk(pdsb, &pat);
   chbfini(&cb);
 }
 
-void loadex(void)
+void loadpats(dsbuf_t *pdsb, const char *fname, int flags)
 {
-  FILE *fp = fopen(g_exfile, "r");
+  FILE *fp = fopen(fname, "r");
   chbuf_t cb = mkchb(); char *line;
   if (!fp) exprintf("can't open excluded patterns file %s:", g_exfile);
   while ((line = fgetlb(&cb, fp)) != NULL) {
     line = strtrim(line);
     if (*line == 0 || *line == '#') continue;
-    addpat(&g_expats, line);
+    addpat(&g_expats, line, flags);
   }
   fclose(fp);
   chbfini(&cb);
 }
 
-bool matchpats(const char *base, const char *fname, dsbuf_t *pdsb)
+bool matchpats(const char *path, const char *fname, dsbuf_t *pdsb)
 {
   size_t i;
   for (i = 0; i < dsblen(pdsb); ++i) {
     dstr_t *pds = dsbref(pdsb, i), pat = *pds;
-    bool res;
-    if (strprf(pat, "./")) res = gmatch(base, pat+2);
-    else if (strchr(pat, '/')) res = gmatch(base, pat);
+    int flags = *pat++ - '0'; bool res;
+    if (flags & PAT_LITERAL) res = streql(path, pat);
+    else if (flags & PAT_ANCHORED) res = gmatch(path, pat);
+    else if (strprf(pat, "./")) res = gmatch(path, pat+2);
+    else if (strchr(pat, '/')) res = gmatch(path, pat);
     else res = gmatch(fname, pat);
     if (res) return true;
   }
@@ -491,46 +503,55 @@ err:
   exprintf("%s: can't write archive header", g_arfile);
 }
 
-void list_header(const char *base, fdebuf_t *pfdb, FILE *pf, bool full)
+void list_files(const char *base, fdebuf_t *pfdb, dsbuf_t *ppats, bool full, FILE *pf)
 {
   size_t i; chbuf_t cb = mkchb();
   for (i = 0; i < fdeblen(pfdb); ++i) {
-    fdent_t *pfde = fdebref(pfdb, i);
+    fdent_t *pfde = fdebref(pfdb, i); 
+    dsbuf_t *ppatsi = ppats; const char *sbase;
+    if (!base) sbase = pfde->name;
+    else sbase = chbsetf(&cb, "%s/%s", base, pfde->name);
+    if (matchpats(sbase, pfde->name, &g_expats)) continue;
+    /* ppats == NULL means list this one and everything below */
+    if (ppatsi && matchpats(sbase, pfde->name, ppatsi)) ppatsi = NULL;
     if (pfde->isdir) {
-      const char *sbase;
-      if (full) {
-        fprintf(pf, "d--%c ", pfde->unpacked ? 'u' : '-');
-        fprintf(pf, "                           ");
+      if (!ppatsi) {
+        if (full) {
+          fprintf(pf, "d--%c ", pfde->unpacked ? 'u' : '-');
+          fprintf(pf, "                           ");
+        }
+        if (!base) fprintf(pf, "%s/\n", pfde->name);
+        else fprintf(pf, "%s/%s/\n", base, pfde->name);
       }
-      if (!base) fprintf(pf, "%s/\n", pfde->name);
-      else fprintf(pf, "%s/%s/\n", base, pfde->name);
-      if (!base) sbase = pfde->name;
-      else sbase = chbsetf(&cb, "%s/%s", base, pfde->name);
-      list_header(sbase, &pfde->files, pf, full);
+      list_files(sbase, &pfde->files, ppatsi, full, pf);
     } else {
-      if (full) {
-        fprintf(pf, "-%c%c%c ", pfde->integrity_hash ? 'i' : '-',
-          pfde->executable ? 'x' : '-', pfde->unpacked ? 'u' : '-');
-        if (pfde->unpacked) fprintf(pf, "              %12lu ", (unsigned long)pfde->size);
-        else fprintf(pf, "@%-12lu %12lu ", (unsigned long)pfde->offset, (unsigned long)pfde->size);
+      if (!ppatsi) {
+        if (full) {
+          fprintf(pf, "-%c%c%c ", pfde->integrity_hash ? 'i' : '-',
+            pfde->executable ? 'x' : '-', pfde->unpacked ? 'u' : '-');
+          if (pfde->unpacked) fprintf(pf, "              %12lu ", (unsigned long)pfde->size);
+          else fprintf(pf, "@%-12lu %12lu ", (unsigned long)pfde->offset, (unsigned long)pfde->size);
+        }
+        if (!base) fprintf(pf, "%s\n", pfde->name);
+        else fprintf(pf, "%s/%s\n", base, pfde->name);
       }
-      if (!base) fprintf(pf, "%s\n", pfde->name);
-      else fprintf(pf, "%s/%s\n", base, pfde->name);
     }
   }
   chbfini(&cb);
 }
 
-void list(void)
+void list(int argc, char **argv)
 {
-  FILE *fp; uint32_t hsz;
+  FILE *fp; uint32_t hsz; 
   fdebuf_t fdeb; fdebinit(&fdeb);
+  while (argc-- > 0) addpat(&g_inpats, *argv++, PAT_LITERAL);
   if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file %s:", g_arfile);
   hsz = read_header(fp, &fdeb);
-  list_header(NULL, &fdeb, stdout, getverbosity() > 0);
+  list_files(NULL, &fdeb, dsbempty(&g_inpats) ? NULL : &g_inpats, getverbosity()>0, stdout);
   fdebfini(&fdeb);
   fclose(fp);
 }
+
 
 
 /* copy file via fread/fwrite */
@@ -661,7 +682,7 @@ void create(int argc, char **argv)
     /* NB: we don't care where file/dir arg is located */
     addfde(0, getfname(argv[i]), argv[i], &fdeb, tfp);
   }
-  list_header(NULL, &fdeb, stdout, getverbosity() > 0);
+  list_files(NULL, &fdeb, NULL, getverbosity()>0, stdout);
   write_header(format, &fdeb, fp);
   rewind(tfp);
   fcopy(tfp, fp);
@@ -684,15 +705,13 @@ void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppat
     if (pfde->isdir) {
       extract_files(sbase, hsz, &pfde->files, ppatsi, fp);
     } else if (!ppatsi) {
-      size_t n, fsz = (size_t)pfde->size; fpos_t pos = (fpos_t)hsz + (fpos_t)pfde->offset;
-      verbosef("extracting %s at position 0x%llx, size = %llu\n", 
-        sbase, (unsigned long long)pos, (unsigned long long)fsz);
-#if 0
-      fsetpos(fp, &pos);
+      size_t n, fsz = (size_t)pfde->size; 
+      long long pos = (long long)hsz + (long long)pfde->offset;
+      verbosef("extracting %s at position 0x%lx, size = %ld\n", sbase, (unsigned long)pos, (long)fsz);
+      if (fseekll(fp, pos, SEEK_SET) != 0) exprintf("%s: seek failed", g_arfile);
       /* for now, dump to stdout, as if -O is given and g_dstdir == "-" */
       n = fcopyn(fp, stdout, fsz);
       if (n != fsz) exprintf("%s: unexpected end of archive", g_arfile);
-#endif
     }
   }
   chbfini(&cb);
@@ -700,13 +719,12 @@ void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppat
 
 void extract(int argc, char **argv)
 {
-  FILE *fp; uint32_t hsz;
-  dsbuf_t pats; fdebuf_t fdeb;
-  dsbinit(&pats); fdebinit(&fdeb);
-  while (argc-- > 0) addpat(&pats, *argv++);
+  FILE *fp; uint32_t hsz; 
+  fdebuf_t fdeb; fdebinit(&fdeb);
+  while (argc-- > 0) addpat(&g_inpats, *argv++, PAT_LITERAL);
   if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file %s:", g_arfile);
   hsz = read_header(fp, &fdeb);
-  extract_files(NULL, hsz, &fdeb, dsbempty(&pats) ? NULL : &pats, fp);
+  extract_files(NULL, hsz, &fdeb, dsbempty(&g_inpats) ? NULL : &g_inpats, fp);
   fdebfini(&fdeb);
   fclose(fp);
 }
@@ -714,7 +732,7 @@ void extract(int argc, char **argv)
 int main(int argc, char **argv)
 {
   int opt;
-
+  int patflags = 0;
   init_archiver();
 
   setprogname(argv[0]);
@@ -745,11 +763,19 @@ int main(int argc, char **argv)
      "  -X, --exclude-from=FILE      Exclude files via globbing patterns in FILE\n"
      "  --exclude=\"PATTERN\"          Exclude files, given as a globbing PATTERN\n"
      "  --unpack=\"PATTERN\"           Exclude files, but keep their info in archive\n"
+     "  --include-from=FILE          List/extract files via globbing patterns in FILE\n"
+     "  --include=\"PATTERN\"          List/extract files, given as a globbing PATTERN\n"
      "  --integrity=SHA256           Calculate or check file integrity info\n"
      "\n"
      "Archive format selection:\n"
      "  -o, --format=asar            Create asar archive even if extension is not .asar\n"
      "  --format=bsar                Create bsar archive even if extension is .asar\n"
+     "\n"
+     "File name matching options:\n"
+     "   --anchored                  Patterns match path\n"
+     "   --no-anchored               Patterns match file/directory name\n"
+     "   --wildcards                 Patterns are wildcards\n"
+     "   --no-wildcards              Patterns match verbatim\n"
      "\n"
      "Informative output:\n"
      "  -v, --verbose                Increase output verbosity\n"
@@ -783,8 +809,14 @@ int main(int argc, char **argv)
         else if (streql(eoptarg, "keep-old-files")) g_keepold = true;
         else if ((arg = strprf(eoptarg, "directory=")) != NULL) g_dstdir = arg;
         else if ((arg = strprf(eoptarg, "exclude-from=")) != NULL) g_exfile = arg;
-        else if ((arg = strprf(eoptarg, "exclude=")) != NULL) addpat(&g_expats, arg);
-        else if ((arg = strprf(eoptarg, "unpack=")) != NULL) addpat(&g_unpats, arg);
+        else if ((arg = strprf(eoptarg, "exclude=")) != NULL) addpat(&g_expats, arg, patflags);
+        else if ((arg = strprf(eoptarg, "unpack=")) != NULL) addpat(&g_unpats, arg, patflags);
+        else if ((arg = strprf(eoptarg, "include-from=")) != NULL) g_infile = arg;
+        else if ((arg = strprf(eoptarg, "include=")) != NULL) addpat(&g_inpats, arg, patflags);
+        else if (streql(eoptarg, "anchored")) patflags |= PAT_ANCHORED;
+        else if (streql(eoptarg, "no-anchored")) patflags &= ~PAT_ANCHORED;
+        else if (streql(eoptarg, "wildcards")) patflags &= ~PAT_LITERAL;
+        else if (streql(eoptarg, "no-wildcards")) patflags |= PAT_LITERAL;
         else if (streql(eoptarg, "verbose")) incverbosity();
         else if (streql(eoptarg, "quiet")) incquietness();
         else if (streql(eoptarg, "help")) g_cmd = 'h';
@@ -798,24 +830,23 @@ int main(int argc, char **argv)
   }
   
   if (streql(g_dstdir, "-")) fbinary(stdout);
+  if (g_exfile) loadpats(&g_expats, g_exfile, patflags);
+  if (g_infile) loadpats(&g_inpats, g_infile, patflags);
   
   switch (g_cmd) {
     case 't': {
       if (!g_arfile) eusage("-f FILE argument is missing");
       if (g_dstdir) eusage("unexpected -C/-O options in create mode");
-      if (g_exfile) eusage("unexpected -X option in listing mode");
-      if (eoptind < argc) eusage("too many arguments for list command");
-      list();
+      list(argc-eoptind, argv+eoptind);
     } break;
     case 'c': {
       if (!g_arfile) eusage("-f FILE argument is missing");
       if (g_dstdir) eusage("unexpected -C/-O options in create mode");
-      if (g_exfile) loadex();
+      if (!dsbempty(&g_inpats)) eusage("unexpected include options in create mode");
       create(argc-eoptind, argv+eoptind);
     } break;
     case 'x': {
       if (!g_arfile) eusage("-f FILE argument is missing");
-      if (g_exfile) loadex();
       extract(argc-eoptind, argv+eoptind);
     } break;
     case 'h': {

@@ -4738,4 +4738,26 @@ bool fisatty(FILE *fp)
   return isatty(fileno(fp)); 
 }
 
+#if defined(_MSC_VER) && (_MSC_VER >= 1400)
+#define fseeki64 _fseeki64
+#define ftelli64 _ftelli64
+#elif !defined(__64BIT__) && (PLATFORM_POSIX_VERSION >= 200112L)
+#define fseeki64 fseeko
+#define ftelli64 fseeko
+#elif defined(__MINGW32__) && defined(__MSVCRT__) && !defined(__STRICT_ANSI__) && !defined(__NO_MINGW_LFS)
+#define fseeki64 fseeko64
+#define ftelli64 fseeko64
+#else
+#define fseeki64 fseek
+#define ftelli64 ftell
+#endif
 
+int fseekll(FILE *fp, long long off, int org)
+{
+  return fseeki64(fp, off, org);
+}
+
+long long ftellll(FILE *fp)
+{
+  return ftelli64(fp);
+}
