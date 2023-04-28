@@ -3995,7 +3995,8 @@ char* bfgetstr(BFILE* pf, chbuf_t* pcb)
 char* bfgetbin(BFILE* pf, chbuf_t* pcb)
 {
   assert(pf); assert(pf->loading);
-  return bfile_getstr(pf->pbf, pcb);
+  bfile_getbin(pf->pbf, pcb);
+  return chbdata(pcb);
 }
 
 void bfputobrk(BFILE* pf)

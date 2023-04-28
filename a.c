@@ -22,7 +22,7 @@ const char *g_dstdir = NULL;  /* destination dir or - for stdout */
 const char *g_exfile = NULL; /* excluded glob patterns file name */
 bool g_keepold = false; /* do not owerwrite existing files (-k) */
 int g_integrity = 0; /* check/calc integrity hashes; 1: SHA256 */
-int g_format = 0; /* 'b': BAR, 't': ASAR, 0: check extension */
+int g_format = 0; /* 'b': BSAR, 'a': ASAR, 0: check extension */
 dsbuf_t g_expats; /* list of excluded patterns */
 dsbuf_t g_unpats; /* list of unpacked patterns */
 size_t g_bufsize = 0x400000;
@@ -126,56 +126,6 @@ uint32_t unpack_uint32_le(uint8_t buf[4])
   return buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
 }
 
-uint32_t read_header(FILE *fp, chbuf_t *pcb)
-{
-  uint8_t hbuf[16]; uint32_t psz, off, asz, ssz, x;
-  if (fread(hbuf, 16, 1, fp) != 1) exprintf("%s: can't read archive header", g_arfile);
-  psz = unpack_uint32_le(hbuf);
-  off = unpack_uint32_le(hbuf+4);  
-  asz = unpack_uint32_le(hbuf+8);  
-  ssz = unpack_uint32_le(hbuf+12);
-  verbosef("psz = 0x%.8x, off = 0x%.8x, asz = 0x%.8x, ssz = 0x%.8x\n", psz, off, asz, ssz);
-  if (ssz < 12) exprintf("%s: invalid asar archive header [3]", g_arfile);
-  x = ssz + 4; if (x % 4 > 0) x += 4 - (x % 4); /* align to 32 bit */
-  if (x != asz) exprintf("%s: invalid asar archive header [2]", g_arfile);
-  x += 4;
-  if (x != off) exprintf("%s: invalid asar archive header [1]", g_arfile); 
-  if (psz != 4) exprintf("%s: invalid asar archive header [0]", g_arfile);
-  bufresize(pcb, ssz);
-  if (fread(pcb->buf, 1, ssz, fp) != ssz) exprintf("%s: invalid archive header data", g_arfile);
-  return off + 8; /* from the start of the file */
-}
-
-void write_header(int format, FILE *fp, chbuf_t *pcb)
-{
-  uint8_t hbuf[16]; uint32_t psz, off, asz, ssz;
-  ssz = (uint32_t)chblen(pcb);
-  asz = ssz + 4; if (asz % 4 > 0) asz += 4 - (asz % 4); /* align to 32 bit */
-  if (format == 't') { /* asar */
-    psz = 4; 
-    off = sizeof(ssz) + asz; /* offset from the end of asz */
-    pack_uint32_le(psz, hbuf);
-    pack_uint32_le(off, hbuf+4);  
-    pack_uint32_le(asz, hbuf+8);  
-    pack_uint32_le(ssz, hbuf+12);
-  } else { /* bsar */
-    psz = 3;
-    off = asz; /* offset from the end of asz */
-    pack_uint32_le(psz, hbuf);
-    pack_uint32_le(off, hbuf+4);  
-    pack_uint32_le(asz, hbuf+8);  
-  }
-  if (fwrite(hbuf, psz*4, 1, fp) != 1) goto err;
-  if (fwrite(chbdata(pcb), ssz, 1, fp) != 1) goto err;
-  if (asz > ssz) {
-    memset(hbuf, 0, 16);
-    if (fwrite(hbuf, asz-ssz, 1, fp) != 1) goto err;
-  }
-  return;
-err: 
-  exprintf("%s: can't write archive header", g_arfile);
-}
-
 void parse_header_files_json(JFILE *jfp, const char *base, fdebuf_t *pfdb)
 {
   chbuf_t kcb = mkchb(), ncb = mkchb();
@@ -183,7 +133,7 @@ void parse_header_files_json(JFILE *jfp, const char *base, fdebuf_t *pfdb)
   while (!jfatcbrc(jfp)) {
     fdent_t *pfde = fdebnewbk(pfdb);
     jfgetkey(jfp, &ncb); /* name: */
-    fprintf(stdout, "%s/%s\n", base, chbdata(&ncb));
+    vverbosef("%s/%s\n", base, chbdata(&ncb));
     pfde->name = exstrdup(chbdata(&ncb));
     jfgetobrc(jfp);
     while (!jfatcbrc(jfp)) {
@@ -232,17 +182,142 @@ void parse_header_files_json(JFILE *jfp, const char *base, fdebuf_t *pfdb)
       }
     }
     if (!pfde->isdir) {
-      fprintf(stdout, "  offset = 0x%.8lx (%ld)\n", 
+      vverbosef("  offset = 0x%.8lx (%ld)\n", 
         (unsigned long)pfde->offset, (unsigned long)pfde->offset);
-      fprintf(stdout, "  size = 0x%.8lx (%ld)\n", 
+      vverbosef("  size = 0x%.8lx (%ld)\n", 
         (unsigned long)pfde->size, (unsigned long)pfde->size);
-      fprintf(stdout, "  executable = %d\n", (int)pfde->executable);
-      fprintf(stdout, "  unpacked = %d\n", (int)pfde->unpacked);
+      vverbosef("  executable = %d\n", (int)pfde->executable);
+      vverbosef("  unpacked = %d\n", (int)pfde->unpacked);
     }
     jfgetcbrc(jfp);
   }
   jfgetcbrc(jfp);
   chbfini(&kcb), chbfini(&ncb);
+}
+
+void parse_header_files_bson(BFILE *bfp, const char *base, fdebuf_t *pfdb)
+{
+  chbuf_t kcb = mkchb(), ncb = mkchb();
+  bfgetobrc(bfp);
+  while (!bfatcbrc(bfp)) {
+    fdent_t *pfde = fdebnewbk(pfdb);
+    bfgetkey(bfp, &ncb); /* name: */
+    vverbosef("%s/%s\n", base, chbdata(&ncb));
+    pfde->name = exstrdup(chbdata(&ncb));
+    bfgetobrc(bfp);
+    while (!bfatcbrc(bfp)) {
+      char *key = bfgetkey(bfp, &kcb);
+      if (streql(key, "files")) {
+        char *nbase = chbsetf(&kcb, "%s/%s", base, chbdata(&ncb));
+        pfde->isdir = true;
+        parse_header_files_bson(bfp, nbase, &pfde->files);
+      } else if (streql(key, "offset")) { 
+        pfde->offset = bfgetnumull(bfp);
+      } else if (streql(key, "size")) { 
+        pfde->size = bfgetnumull(bfp);
+      } else if (streql(key, "executable")) { 
+        pfde->executable = bfgetbool(bfp);
+      } else if (streql(key, "unpacked")) { 
+        pfde->unpacked = bfgetbool(bfp);
+      } else if (streql(key, "integrity")) {
+        int integrity = 0; 
+        bfgetobrc(bfp);
+        while (!bfatcbrc(bfp)) {
+          key = bfgetkey(bfp, &kcb);
+          if (streql(key, "algorithm")) {
+            integrity = bfgetnum(bfp);
+            if (integrity == 1) pfde->integrity_algorithm = 1; /* SHA256 */
+          } else if (streql(key, "hash")) {
+            char *hash = bfgetbin(bfp, &kcb);
+            if (integrity == 1 && chblen(&kcb) == SHA256DG_SIZE)
+              pfde->integrity_hash = exmemdup(hash, SHA256DG_SIZE);
+          } else if (streql(key, "blockSize")) {
+            unsigned long n = (unsigned long)bfgetnumull(bfp);
+            if (integrity == 1) pfde->integrity_block_size = n; 
+          } else if (streql(key, "blocks")) {
+            bfgetobrk(bfp);
+            while (!bfatcbrk(bfp)) {
+              char *block = bfgetbin(bfp, &kcb);
+              if (integrity == 1 && chblen(&kcb) == SHA256DG_SIZE) {
+                *dsbnewbk(&pfde->integrity_blocks) = exmemdup(block, SHA256DG_SIZE);
+              }  
+            }
+            bfgetcbrk(bfp);
+          }
+        }
+        bfgetcbrc(bfp);
+      } else { 
+        exprintf("%s: invalid entry: %s", g_arfile, chbdata(&kcb));
+      }
+    }
+    if (!pfde->isdir) {
+      vverbosef("  offset = 0x%.8lx (%ld)\n", 
+        (unsigned long)pfde->offset, (unsigned long)pfde->offset);
+      vverbosef("  size = 0x%.8lx (%ld)\n", 
+        (unsigned long)pfde->size, (unsigned long)pfde->size);
+      vverbosef("  executable = %d\n", (int)pfde->executable);
+      vverbosef("  unpacked = %d\n", (int)pfde->unpacked);
+    }
+    bfgetcbrc(bfp);
+  }
+  bfgetcbrc(bfp);
+  chbfini(&kcb), chbfini(&ncb);
+}
+
+uint32_t read_header(FILE *fp, fdebuf_t *pfdb)
+{
+  uint8_t hbuf[16]; uint32_t psz, off, asz, ssz;
+  int format; /* 'a': asar, 'b': bsar */ 
+  /* read header data from fp */
+  if (fread(hbuf, 4, 1, fp) != 1) goto err;
+  psz = unpack_uint32_le(hbuf);
+  if (psz == 3) format = 'b';
+  else if (psz == 4) format = 'a';
+  else exprintf("%s: invalid archive header", g_arfile);
+  if (format == 'a') { /* asar, 4-word signature */ 
+    JFILE *jfp; uint32_t x;
+    chbuf_t kcb = mkchb();
+    if (fread(hbuf+4, 12, 1, fp) != 1) goto err;
+    off = unpack_uint32_le(hbuf+4);  
+    asz = unpack_uint32_le(hbuf+8);  
+    ssz = unpack_uint32_le(hbuf+12);
+    if (ssz < 12) exprintf("%s: invalid asar archive header [3]", g_arfile);
+    x = ssz + 4; if (x % 4 > 0) x += 4 - (x % 4); /* align to 32 bit */
+    if (x != asz) exprintf("%s: invalid asar archive header [2]", g_arfile);
+    x += 4;
+    if (x != off) exprintf("%s: invalid asar archive header [1]", g_arfile); 
+    off += 8; /* from the start of the file */
+    /* header starts right after 4-word signature */
+    jfp = newjfii(FILE_pii, fp);
+    jfgetobrc(jfp);
+    jfgetkey(jfp, &kcb); /* "files": */
+    if (!streql(chbdata(&kcb), "files")) exprintf("%s: invalid asar file list", g_arfile);
+    parse_header_files_json(jfp, "", pfdb);
+    jfgetcbrc(jfp);
+    freejf(jfp);
+    chbfini(&kcb);
+  } else { /* bsar, 3-word signature */
+    BFILE *bfp; chbuf_t kcb = mkchb();
+    if (fread(hbuf+4, 8, 1, fp) != 1) goto err;
+    off = unpack_uint32_le(hbuf+4);  
+    asz = unpack_uint32_le(hbuf+8);  
+    ssz = 0;
+    if (asz != off) exprintf("%s: invalid bsar archive header [1]", g_arfile);
+    off += 6; /* from the start of the file */
+    /* header starts right after 3-word signature */
+    bfp = newbfii(FILE_pii, fp);
+    bfgetobrc(bfp);
+    bfgetkey(bfp, &kcb); /* "files": */
+    if (!streql(chbdata(&kcb), "files")) exprintf("%s: invalid bsar file list", g_arfile);
+    parse_header_files_bson(bfp, "", pfdb);
+    bfgetcbrc(bfp);
+    freebf(bfp);
+    chbfini(&kcb);
+  }
+  return off;
+err:
+  exprintf("%s: can't read archive header", g_arfile);
+  return 0;
 }
 
 void unparse_header_files_json(JFILE *jfp, fdebuf_t *pfdb)
@@ -364,46 +439,56 @@ void unparse_header_files_bson(BFILE *bfp, fdebuf_t *pfdb)
   chbfini(&cb);  
 }
 
-void parse_header(chbuf_t *pcb, fdebuf_t *pfdb)
+void write_header(int format, fdebuf_t *pfdb, FILE *fp)
 {
-  char *pc = pcb->buf; 
-  JFILE *jfpi = newjfii(strptr_pii, &pc);
-  JFILE *jfpo = newjfoi(FILE_poi, stdout);
-  chbuf_t kcb = mkchb(); 
-  jfgetobrc(jfpi);
-  jfgetkey(jfpi, &kcb); /* "files": */
-  if (!streql(chbdata(&kcb), "files")) exprintf("%s: invalid file list", g_arfile);
-  parse_header_files_json(jfpi, "", pfdb);
-  jfgetcbrc(jfpi);
-  freejf(jfpi);
-  jfputobrc(jfpo);
-  jfputkey(jfpo, "files");
-  unparse_header_files_json(jfpo, pfdb);
-  jfputcbrc(jfpo);
-  freejf(jfpo); fputc('\n', stdout);
-  chbfini(&kcb);
-}
-
-void unparse_header(int format, chbuf_t *pcb, fdebuf_t *pfdb)
-{
-  if (format == 't') {
-    JFILE *jfp = newjfoi(cbuf_poi, pcb);
+  uint8_t hbuf[16]; uint32_t psz, off, asz, ssz;
+  chbuf_t hcb = mkchb();
+  /* serialize header data to hcb */
+  if (format == 'a') {
+    JFILE *jfp = newjfoi(cbuf_poi, &hcb);
     jfputobrc(jfp);
     jfputkey(jfp, "files");
     unparse_header_files_json(jfp, pfdb);
     jfputcbrc(jfp);
     freejf(jfp);
   } else {
-    BFILE *bfp = newbfoi(cbuf_poi, pcb);
+    BFILE *bfp = newbfoi(cbuf_poi, &hcb);
     bfputobrc(bfp);
     bfputkey(bfp, "files");
     unparse_header_files_bson(bfp, pfdb);
     bfputcbrc(bfp);
     freebf(bfp);
   }
+  /* write header data to fp */
+  ssz = (uint32_t)chblen(&hcb);
+  asz = ssz + 4; if (asz % 4 > 0) asz += 4 - (asz % 4); /* align to 32 bit */
+  if (format == 'a') { /* asar, 4-word signature */
+    psz = 4; 
+    off = sizeof(ssz) + asz; /* offset from the end of asz */
+    pack_uint32_le(psz, hbuf);
+    pack_uint32_le(off, hbuf+4);  
+    pack_uint32_le(asz, hbuf+8);  
+    pack_uint32_le(ssz, hbuf+12);
+  } else { /* bsar, 3-word signature */
+    psz = 3;
+    off = asz; /* offset from the end of asz */
+    pack_uint32_le(psz, hbuf);
+    pack_uint32_le(off, hbuf+4);  
+    pack_uint32_le(asz, hbuf+8);  
+  }
+  if (fwrite(hbuf, psz*4, 1, fp) != 1) goto err;
+  if (fwrite(chbdata(&hcb), ssz, 1, fp) != 1) goto err;
+  if (asz > ssz) {
+    memset(hbuf, 0, 16);
+    if (fwrite(hbuf, asz-ssz, 1, fp) != 1) goto err;
+  }
+  chbfini(&hcb);
+  return;
+err: 
+  exprintf("%s: can't write archive header", g_arfile);
 }
 
-void list_fdebuf(const char *base, fdebuf_t *pfdb, FILE *pf, bool full)
+void list_header(const char *base, fdebuf_t *pfdb, FILE *pf, bool full)
 {
   size_t i; chbuf_t cb = mkchb();
   for (i = 0; i < fdeblen(pfdb); ++i) {
@@ -418,7 +503,7 @@ void list_fdebuf(const char *base, fdebuf_t *pfdb, FILE *pf, bool full)
       else fprintf(pf, "%s/%s/\n", base, pfde->name);
       if (!base) sbase = pfde->name;
       else sbase = chbsetf(&cb, "%s/%s", base, pfde->name);
-      list_fdebuf(sbase, &pfde->files, pf, full);
+      list_header(sbase, &pfde->files, pf, full);
     } else {
       if (full) {
         fprintf(pf, "-%c%c%c ", pfde->integrity_hash ? 'i' : '-',
@@ -435,14 +520,12 @@ void list_fdebuf(const char *base, fdebuf_t *pfdb, FILE *pf, bool full)
 
 void list(void)
 {
-  FILE *fp; uint32_t off; chbuf_t cb = mkchb();
+  FILE *fp; uint32_t off;
   fdebuf_t fdeb; fdebinit(&fdeb);
   if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file %s:", g_arfile);
-  off = read_header(fp, &cb);
-  verbosef("header = \'%s\'\n", chbdata(&cb));
-  parse_header(&cb, &fdeb);
-  list_fdebuf(NULL, &fdeb, stdout, getverbosity() > 0);
-  chbfini(&cb); fdebfini(&fdeb);
+  off = read_header(fp, &fdeb);
+  list_header(NULL, &fdeb, stdout, getverbosity() > 0);
+  fdebfini(&fdeb);
   fclose(fp);
 }
 
@@ -549,23 +632,22 @@ uint64_t addfde(uint64_t off, const char *base, const char *path, fdebuf_t *pfde
 void create(int argc, char **argv)
 {
   FILE *fp, *tfp; fdebuf_t fdeb;
-  chbuf_t hcb = mkchb(); int i, format;
+  int i, format;
   if (!(fp = fopen(g_arfile, "wb"))) exprintf("can't open archive file %s:", g_arfile);
-  format = g_format ? g_format : strsuf(g_arfile, ".asar") ? 't' : 'b';
+  format = g_format ? g_format : strsuf(g_arfile, ".asar") ? 'a' : 'b';
   tfp = etmpopen("w+b");
   fdebinit(&fdeb);
   for (i = 0; i < argc; ++i) {
     /* NB: we don't care where file/dir arg is located */
     addfde(0, getfname(argv[i]), argv[i], &fdeb, tfp);
   }
-  list_fdebuf(NULL, &fdeb, stdout, getverbosity() > 0);
-  unparse_header(format, &hcb, &fdeb);
-  write_header(format, fp, &hcb);
+  list_header(NULL, &fdeb, stdout, getverbosity() > 0);
+  write_header(format, &fdeb, fp);
   rewind(tfp);
   fcopy(tfp, fp);
   fclose(tfp);
   fclose(fp);
-  chbfini(&hcb); fdebfini(&fdeb);
+  fdebfini(&fdeb);
 }
 
 void b2jcopyfield(BFILE *bfp, JFILE *jfp, bool inobj)
@@ -629,30 +711,7 @@ void b2jcopyfield(BFILE *bfp, JFILE *jfp, bool inobj)
 
 void extract(int argc, char **argv)
 {
-#if 1 /* ... */
-  /* for now, look at g_format, not at header */
-  FILE *fp; uint32_t off; chbuf_t cb = mkchb();
-  fdebuf_t fdeb; fdebinit(&fdeb);
-  if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file %s:", g_arfile);
-  off = read_header(fp, &cb);
-  verbosef("header = \'%s\'\n", chbdata(&cb));
-  parse_header(&cb, &fdeb);
-  list_fdebuf(NULL, &fdeb, stdout, getverbosity() > 0);
-  chbfini(&cb); fdebfini(&fdeb);
-  fclose(fp);
-#else /* just a dump of bson */
-  FILE *fp; JFILE *jfp; BFILE *bfp;
-  if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file %s:", g_arfile);
-  jfp = newjfoi(FILE_poi, stdout);
-  bfp = newbfii(FILE_pii, fp);
-  bfgetobrc(bfp); 
-  jfputobrc(jfp);
-  while (!bfatcbrc(bfp)) b2jcopyfield(bfp, jfp, true);
-  bfgetcbrc(bfp); 
-  jfputcbrc(jfp);
-  freebf(bfp); freejf(jfp);
-  fclose(fp);
-#endif  
+  eusage("NYI: -x");
 }
 
 int main(int argc, char **argv)
@@ -713,7 +772,7 @@ int main(int argc, char **argv)
       case 'C': g_dstdir = eoptarg; break;
       case 'O': g_dstdir = "-"; break;
       case 'X': g_exfile = eoptarg; break;
-      case 'o': g_format = 't'; break;
+      case 'o': g_format = 'a'; break;
       case 'w': setwlevel(3); break;
       case 'v': incverbosity(); break;
       case 'q': incquietness(); break;
@@ -733,8 +792,8 @@ int main(int argc, char **argv)
         else if (streql(eoptarg, "quiet")) incquietness();
         else if (streql(eoptarg, "help")) g_cmd = 'h';
         else if (streql(eoptarg, "integrity=SHA256")) g_integrity = 1;
-        else if (streql(eoptarg, "old-archive")) g_format = 't';
-        else if (streql(eoptarg, "format=asar")) g_format = 't';
+        else if (streql(eoptarg, "old-archive")) g_format = 'a';
+        else if (streql(eoptarg, "format=asar")) g_format = 'a';
         else if (streql(eoptarg, "format=bar")) g_format = 'b';
         else eusage("illegal option: --%s", eoptarg);  
       } break;
