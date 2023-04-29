@@ -557,15 +557,14 @@ void list(int argc, char **argv)
 /* copy file via fread/fwrite */
 size_t fcopy(FILE *ifp, FILE *ofp)
 {
-  char buf[BUFSIZ];
   size_t bc = 0;
   assert(ifp); assert(ofp);
   for (;;) {
-    size_t n = fread(buf, 1, BUFSIZ, ifp);
+    size_t n = fread(g_buffer, 1, g_bufsize, ifp);
     if (!n) break;
-    fwrite(buf, 1, n, ofp);
+    fwrite(g_buffer, 1, n, ofp);
     bc += n;
-    if (n < BUFSIZ) break;
+    if (n < g_bufsize) break;
   }
   return bc;
 }
@@ -573,21 +572,20 @@ size_t fcopy(FILE *ifp, FILE *ofp)
 /* copy file via fread/fwrite */
 size_t fcopyn(FILE *ifp, FILE *ofp, size_t bytec)
 {
-  char buf[BUFSIZ];
   size_t bc = 0;
   assert(ifp); assert(ofp);
   while (bytec > 0) {
-    size_t c = (bytec < BUFSIZ) ? bytec : BUFSIZ;
-    size_t n = fread(buf, 1, c, ifp);
+    size_t c = (bytec < g_bufsize) ? bytec : g_bufsize;
+    size_t n = fread(g_buffer, 1, c, ifp);
     if (!n) break;
-    fwrite(buf, 1, n, ofp);
+    fwrite(g_buffer, 1, n, ofp);
     bc += n;
     bytec -= c;
   }
   return bc;
 }
 
-void writef(const char *path, fdent_t *pfde, FILE *ofp)
+void write_file(const char *path, fdent_t *pfde, FILE *ofp)
 {
   chbuf_t cb = mkchb(); FILE *ifp;  
   sha256ctx_t fhash, bhash;
@@ -627,7 +625,7 @@ void writef(const char *path, fdent_t *pfde, FILE *ofp)
   chbfini(&cb);
 }
 
-uint64_t addfde(uint64_t off, const char *base, const char *path, fdebuf_t *pfdeb, FILE *ofp)
+uint64_t create_files(uint64_t off, const char *base, const char *path, fdebuf_t *pfdeb, FILE *ofp)
 {
   fsstat_t st;
   if (fsstat(path, &st) && (st.isdir || st.isreg)) {
@@ -651,7 +649,7 @@ uint64_t addfde(uint64_t off, const char *base, const char *path, fdebuf_t *pfde
             if (streql(*pds, ".") || streql(*pds, "..")) continue;
             nb = *base ? chbsetf(&cbb, "%s/%s", base, *pds) : *pds;
             np = chbsetf(&cbp, "%s/%s", path, *pds);
-            off = addfde(off, nb, np, &pfde->files, ofp);
+            off = create_files(off, nb, np, &pfde->files, ofp);
           }
         } else {
           exprintf("can't open directory: %s", path);
@@ -661,7 +659,7 @@ uint64_t addfde(uint64_t off, const char *base, const char *path, fdebuf_t *pfde
       } else {
         pfde->offset = off;
         off += pfde->size;
-        writef(path, pfde, ofp);
+        write_file(path, pfde, ofp);
       }
     }
   } else {
@@ -680,7 +678,7 @@ void create(int argc, char **argv)
   fdebinit(&fdeb);
   for (i = 0; i < argc; ++i) {
     /* NB: we don't care where file/dir arg is located */
-    off = addfde(off, getfname(argv[i]), argv[i], &fdeb, tfp);
+    off = create_files(off, getfname(argv[i]), argv[i], &fdeb, tfp);
   }
   list_files(NULL, &fdeb, NULL, getverbosity()>0, stdout);
   write_header(format, &fdeb, fp);
@@ -705,10 +703,16 @@ void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppat
     if (ppatsi && matchpats(sbase, pfde->name, ppatsi)) ppatsi = NULL;
     if (pfde->isdir) {
       extract_files(sbase, hsz, &pfde->files, ppatsi, fp);
-    } else if (!ppatsi) {
+    } else if (!ppatsi && !pfde->unpacked) {
       size_t n, fsz = (size_t)pfde->size; 
       long long pos = (long long)hsz + (long long)pfde->offset;
-      verbosef("extracting %s at position 0x%lx, size = %ld\n", sbase, (unsigned long)pos, (long)fsz);
+      if (getverbosity() > 0) {
+        logef("-%c%c%c ", pfde->integrity_hash ? 'i' : '-',
+          pfde->executable ? 'x' : '-', pfde->unpacked ? 'u' : '-');
+        if (pfde->unpacked) logef("              %12lu ", (unsigned long)pfde->size);
+        else logef("@%-12lu %12lu ", (unsigned long)pfde->offset, (unsigned long)pfde->size);
+      }
+      logef("%s\n", sbase);
       if (fseekll(fp, pos, SEEK_SET) != 0) exprintf("%s: seek failed", g_arfile);
       if (streql(g_dstdir, "-")) {
         n = fcopyn(fp, stdout, fsz);
