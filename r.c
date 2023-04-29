@@ -1,6 +1,19 @@
 /* r.c (platform-specific stuff) -- esl */
 
-#define _LARGEFILE64_SOURCE
+#if defined(__GNUC__) && defined(__linux)
+  #ifdef _FEATURES_H
+    #warning too late to select features
+  #endif
+  #if !defined( _GNU_SOURCE )
+    #define _GNU_SOURCE
+  #endif
+  #define _ISOC99_SOURCE
+  #define _XOPEN_SOURCE 500 /* pthreads/leveling the field */
+  #if defined( __INTERIX )
+    #define _XOPEN_SOURCE_EXTENDED 1
+  #endif
+#endif
+  
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -47,6 +60,9 @@ typedef struct _stat stat_t;
 #define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
 #ifdef _DEBUG
 #include <crtdbg.h>
+#endif
+#ifndef EEXIST 
+#include <errno.h>
 #endif
 #elif defined(__GNUC__) && defined(__APPLE__) 
 #include <mach-o/dyld.h>
