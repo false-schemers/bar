@@ -8,7 +8,7 @@
     #define _GNU_SOURCE
   #endif
   #define _ISOC99_SOURCE
-  #define _XOPEN_SOURCE 500 /* pthreads/leveling the field */
+  #define _XOPEN_SOURCE 500
   #if defined( __INTERIX )
     #define _XOPEN_SOURCE_EXTENDED 1
   #endif

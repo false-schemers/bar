@@ -503,6 +503,7 @@ err:
   exprintf("%s: can't write archive header", g_arfile);
 }
 
+
 void list_files(const char *base, fdebuf_t *pfdb, dsbuf_t *ppats, bool full, FILE *pf)
 {
   size_t i; chbuf_t cb = mkchb();
@@ -551,7 +552,6 @@ void list(int argc, char **argv)
   fdebfini(&fdeb);
   fclose(fp);
 }
-
 
 
 /* copy file via fread/fwrite */
@@ -673,14 +673,14 @@ uint64_t addfde(uint64_t off, const char *base, const char *path, fdebuf_t *pfde
 void create(int argc, char **argv)
 {
   FILE *fp, *tfp; fdebuf_t fdeb;
-  int i, format;
+  int i, format; uint64_t off = 0;
   if (!(fp = fopen(g_arfile, "wb"))) exprintf("can't open archive file %s:", g_arfile);
   format = g_format ? g_format : strsuf(g_arfile, ".asar") ? 'a' : 'b';
   tfp = etmpopen("w+b");
   fdebinit(&fdeb);
   for (i = 0; i < argc; ++i) {
     /* NB: we don't care where file/dir arg is located */
-    addfde(0, getfname(argv[i]), argv[i], &fdeb, tfp);
+    off = addfde(off, getfname(argv[i]), argv[i], &fdeb, tfp);
   }
   list_files(NULL, &fdeb, NULL, getverbosity()>0, stdout);
   write_header(format, &fdeb, fp);
@@ -690,6 +690,7 @@ void create(int argc, char **argv)
   fclose(fp);
   fdebfini(&fdeb);
 }
+
 
 void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppats, FILE *fp)
 {
@@ -728,6 +729,7 @@ void extract(int argc, char **argv)
   fdebfini(&fdeb);
   fclose(fp);
 }
+
 
 int main(int argc, char **argv)
 {
