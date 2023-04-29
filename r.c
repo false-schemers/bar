@@ -1,4 +1,4 @@
-/* r.c (platform-specific stuff) -- esl */
+/* r.c (platform stuff) -- esl */
 
 #if defined(__GNUC__) && defined(__linux)
   #ifdef _FEATURES_H
@@ -132,6 +132,110 @@ typedef struct stat stat_t;
 
 /* path name components */
 
+#ifdef WIN32
+int dirsep = '\\';
+#else
+int dirsep = '/';
+#endif
+
+/* dirpath is "", "/" or ends in separator ".../" */
+
+/* ends in "foo/" */
+bool hasdpar(const char* path)
+{
+  char* pc; size_t len, dnlen;
+  assert(path);
+  len = strlen(path);
+  if (!len) return false; /* "" has no parents */
+  pc = (char*)path + len;
+  /* expect, but not enforce trailing sep */
+  if (pc[-1] == '/') --pc;
+#ifdef WIN32
+  else if (pc[-1] == '\\') --pc;
+#endif
+  /* trailing sep skipped, look for previous one */
+  dnlen = 0;
+  while (pc > path) {
+    if (pc[-1] == '/') break;
+#ifdef WIN32
+    else if (pc[-1] == '\\') break;
+    else if (pc[-1] == ':') break;
+#endif
+    --pc; ++dnlen;
+  }
+  /* succeed if saw non-empty last segment */
+  return dnlen > 0;
+}
+
+/* all up to last "foo/" */
+size_t spandpar(const char* path)
+{
+  char* pc; size_t len;
+  assert(path);
+  len = strlen(path);
+  if (!len) return len; /* "" has no parents */
+  pc = (char*)path + len;
+  /* expect, but not enforce trailing sep */
+  if (pc[-1] == '/') --pc;
+#ifdef WIN32
+  else if (pc[-1] == '\\') --pc;
+#endif
+  /* trailing sep skipped, look for previous one */
+  while (pc > path) {
+    if (pc[-1] == '/') break;
+#ifdef WIN32
+    else if (pc[-1] == '\\') break;
+    else if (pc[-1] == ':') break;
+#endif
+    --pc;
+  }
+  /* succeed no matter what we chopped off */
+  return pc - path;
+}
+ 
+/* last "foo/" */
+char* getdname(const char* path)
+{
+  /* must be the same as path + spandpar(path) */
+  char* pc; size_t len;
+  assert(path);
+  len = strlen(path);
+  pc = (char*)path + len;
+  if (!len) return pc; /* "" has no parents */
+  /* expect, but not enforce trailing sep */
+  if (pc[-1] == '/') --pc;
+#ifdef WIN32
+  else if (pc[-1] == '\\') --pc;
+#endif
+  /* trailing sep skipped, look for previous one */
+  while (pc > path) {
+    if (pc[-1] == '/') break;
+#ifdef WIN32
+    else if (pc[-1] == '\\') break;
+    else if (pc[-1] == ':') break;
+#endif
+    --pc;
+  }
+  /* succeed no matter what we chopped off */
+  return pc;
+}
+
+/* spans dir ("", "/", or "..../foo/") */
+size_t spanfdir(const char* path)
+{
+  char* pc;
+  assert(path);
+  if ((pc = strrchr(path, '/')) != NULL)
+    return pc+1-path;
+#ifdef WIN32
+  else if ((pc = strrchr(path, '\\')) != NULL)
+    return pc+1-path;
+  else if ((pc = strrchr(path, ':')) != NULL)
+    return pc+1-path;
+#endif
+  return 0;
+}
+
 /* returns trailing file name */
 char *getfname(const char *path)
 {
@@ -165,6 +269,69 @@ char* getfext(const char* path)
   return (char*)(path+strlen(path));
 }
 
+/* parse path as <root> <relpath> */
+bool pathparse2(const char *path, size_t *proot, size_t *prelpath)
+{
+  bool ok = true;
+  size_t root = 0, rest = 0; 
+  /* no path is the same as empty one */
+  if (!path) path = ""; else rest = strlen(path);
+  /* chop off the root if any */
+#ifdef WIN32
+  /* by default, there's no root */
+  if ((path[0] == '\\' || path[0] == '/') && (path[1] == '\\' || path[1] == '/')) {
+    const char *pc, *pc2;
+    if (((pc = strchr(path+2, '\\')) || (pc = strchr(path+2, '/'))) && 
+        ((pc2 = strchr(pc+1, '\\')) || (pc2 = strchr(pc+1, '/')))) {
+       /* \\<server>\<share>\ root found */
+       size_t rsz = (size_t)(pc2+1 - path);
+       root = rsz;
+       rest -= rsz;
+       /* check for root bogosity, including legal \\?\ which we can't handle */
+       if (strcspn(path+root, ":*?\"<>|") < rsz) ok = false;
+    }
+  } else if (isalpha(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
+    /* <drive_letter>:\ root found */
+    root = 3;
+    rest -= 3;
+  }
+  /* check for relpath bogosity, including legal cases like C:foo which we can't handle */
+  if (path[root] == '\\' || path[root] == '/') ok = false;
+  else if (strcspn(path+root, ":*?\"<>|") != rest) ok = false;
+#else /* Un**x */
+  if (path[0] == '/') {
+    root = 1;
+    rest -= 1;
+  }
+  /* check for relpath bogosity, including legal cases like ~/foo which we can't handle */
+  if (strcspn(path+root, "~") != rest) ok = false;
+#endif
+  if (proot) *proot = root;
+  if (prelpath) *prelpath = rest;
+  return ok;
+}
+
+/* trim optional separator at the end of pname */
+extern char *trimdirsep(char *pname)
+{
+  size_t len = strlen(pname);
+  if (!len) return pname;
+  if (pname[len-1] == '/') pname[len-1] = 0;
+#ifdef WIN32
+  if (pname[len-1] == '\\') pname[len-1] = 0;
+#endif
+  return pname;
+}
+
+void chbputdirsep(chbuf_t *pcb)
+{
+  assert(pcb);
+#ifdef WIN32
+  chbputc('\\', pcb);
+#else /* Un**x */
+  chbputc('/', pcb);
+#endif
+}
 
 #if defined(_MSC_VER)
 static char *fixapath(const char *apath, chbuf_t *pcb)
@@ -220,6 +387,24 @@ bool fsstat(const char *path, fsstat_t *ps)
   ps->isdir = S_ISDIR(s.st_mode);
   ps->size = (uint64_t)s.st_size;
   return true; 
+}
+
+/* check that path points to existing file */
+bool fexists(const char *path)
+{
+  fsstat_t s;
+  assert(path);
+  if (!fsstat(path, &s)) return false;
+  return s.isreg; 
+}
+
+/* check that path points to existing dir */
+bool direxists(const char *path)
+{
+  fsstat_t s;
+  assert(path);
+  if (!fsstat(path, &s)) return false;
+  return s.isdir; 
 }
 
 /* Windows dirent */
@@ -395,6 +580,68 @@ bool dir(const char *dirpath, dsbuf_t *pdsv)
    }
    closedir(pdir);
    return true;
+}
+
+/* emkdir: create new last dir on the path, throw errors */
+void emkdir(const char *dir)
+{
+  assert(dir);
+  if (mkdir(dir, 0777) != 0)
+    exprintf("cannot mkdir '%s':", dir);
+}
+
+/* ermdir: remove empty last dir on the path, throw errors */
+void ermdir(const char *dir)
+{
+  assert(dir);
+  if (rmdir(dir) != 0)
+    exprintf("cannot rmdir '%s':", dir);
+}
+
+/* split relative path into segments */
+static void rel_splitpath(const char *path, size_t plen, dsbuf_t *psegv)
+{
+  dsbclear(psegv);
+  if (plen) {
+    chbuf_t cb = mkchb(), cbs = mkchb();
+#ifdef WIN32
+    char *sep = "\\/";
+#else /* Un**x */
+    char *sep = "/";
+#endif
+    char *str = chbset(&cb, path, plen), *seg;
+    while ((seg = strtoken(str, sep, &str, &cbs)) != NULL)
+      dsbpushbk(psegv, &seg);
+    chbfini(&cb);
+    chbfini(&cbs);
+  }
+}
+
+/* creates final dirs on the path as needed */
+void emkdirp(const char *path)
+{
+  size_t rlen, plen;
+  assert(path);
+  if (!pathparse2(path, &rlen, &plen)) {
+    exprintf("cannot mkdirs '%s':", path);
+  } else {
+    size_t i;
+    chbuf_t cb = mkchb();
+    dsbuf_t segv; dsbinit(&segv);
+    rel_splitpath(path+rlen, plen, &segv);
+    chbput(path, rlen, &cb);
+    /* write back the resulting path */
+    for (i = 0; i < dsblen(&segv); ++i) {
+      dstr_t *pds = dsbref(&segv, i);
+      if (i > 0) chbputdirsep(&cb);
+      chbputs(*pds, &cb);
+      path = chbdata(&cb);
+      if (!direxists(path))
+        emkdir(path);
+    }
+    chbfini(&cb);
+    dsbfini(&segv);
+  }
 }
 
 /* opens new tmp file in w+b; it is deleted when file closed or program exits/crashes */

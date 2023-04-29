@@ -223,6 +223,10 @@ extern void binullong(unsigned long long ull, chbuf_t* pcb); /* align=8 */
 extern void binfloat(float f, chbuf_t* pcb);   /* align=4 */
 extern void bindouble(double d, chbuf_t* pcb); /* align=8 */
 
+/* strtok replacement */
+/* usage: while ((tok = strtoken(str, sep, &str, pcb) != NULL) ...;  */
+extern char *strtoken(const char *str, const char *sep, char** ep, chbuf_t *pcb);
+
 /* symbols */
 typedef int sym_t;
 #define sym_cmp int_cmp

@@ -18,7 +18,7 @@
 /* bar globals */
 char g_cmd = 'h'; /* 't', 'x', 'c', or 'h' */
 const char *g_arfile = NULL; /* archive file name */
-const char *g_dstdir = NULL;  /* destination dir or - for stdout */
+const char *g_dstdir = ".";  /* destination dir or - for stdout */
 const char *g_infile = NULL; /* included glob patterns file name */
 const char *g_exfile = NULL; /* excluded glob patterns file name */
 bool g_keepold = false; /* do not owerwrite existing files (-k) */
@@ -710,8 +710,28 @@ void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppat
       long long pos = (long long)hsz + (long long)pfde->offset;
       verbosef("extracting %s at position 0x%lx, size = %ld\n", sbase, (unsigned long)pos, (long)fsz);
       if (fseekll(fp, pos, SEEK_SET) != 0) exprintf("%s: seek failed", g_arfile);
-      /* for now, dump to stdout, as if -O is given and g_dstdir == "-" */
-      n = fcopyn(fp, stdout, fsz);
+      if (streql(g_dstdir, "-")) {
+        n = fcopyn(fp, stdout, fsz);
+      } else {
+        chbuf_t fcb = mkchb(), dcb = mkchb();
+        char *dstdir = trimdirsep(chbsets(&dcb, g_dstdir));
+        char *dpath = (streql(dstdir, ".")) ?
+          chbsets(&fcb, sbase) : chbsetf(&fcb, "%s%c%s", dstdir, dirsep, sbase);
+        char *ddir = chbset(&dcb, dpath, spanfdir(dpath));
+        FILE *ofp;
+        if (!direxists(ddir)) {
+          vverbosef("%s: creating missing directories on path: %s\n", progname(), ddir);
+          emkdirp(ddir);
+        }
+        if (fexists(dpath) && g_keepold) {
+          logef("%s: keeping existing file in -k mode: %s\n", progname(), dpath);
+          continue;
+        }
+        ofp = fopen(dpath, "wb");
+        if (!ofp) exprintf("%s: can't open file for writing:", dpath);
+        else { n = fcopyn(fp, ofp, fsz); fclose(ofp); }
+        chbfini(&fcb), chbfini(&dcb);
+      }
       if (n != fsz) exprintf("%s: unexpected end of archive", g_arfile);
     }
   }
@@ -797,6 +817,7 @@ int main(int argc, char **argv)
       case 'x': g_cmd = 'x'; gotmode = true; break;
       case 'f': gotf = true; break;
       case 'o': g_format = 'a'; break;
+      case 'k': g_keepold = true; break;
       case 'v': incverbosity(); break;
       default: eusage("unexpected flag in command combo: %c", *--cmd);
     }

@@ -1444,6 +1444,21 @@ void bindouble(double d, chbuf_t* pcb) /* align=8 */
 }
 
 
+/* strtok replacement */
+
+/* usage: while ((tok = strtoken(str, sep, &str, pcb) != NULL) ...;  */
+char *strtoken(const char *str, const char *sep, char** ep, chbuf_t *pcb)
+{
+  size_t n; assert(sep); assert(pcb);
+  if (ep) *ep = NULL; /* reset ep */
+  if (str == NULL) return NULL; /* no tokens here */
+  str += strspn(str, sep); /* skip leading seps */
+  if (!(n = strcspn(str, sep))) return NULL; /* measure token */
+  if (ep) *ep = (char*)str + n; /* set ep to first char after token */
+  return chbset(pcb, str, n); /* copy token to pcb and return pcb data */
+}
+
+
 /* symbols */
 
 static struct { char **a; char ***v; size_t sz; size_t u; size_t maxu; } g_symt;
