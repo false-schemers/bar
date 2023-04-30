@@ -43,10 +43,15 @@ extern void ermdir(const char *dir);
 extern void emkdirp(const char *path);
 /* opens new tmp file in w+b; it is deleted when file closed or program exits/crashes */
 extern FILE *etmpopen(const char *mode);
+
 /* sets stdin/stdout into binary mode (no-op on Unix) */
 extern void fbinary(FILE *stdfile);
 /* check that file is a tty */
 extern bool fisatty(FILE *fp);
+
 /* long long file positioning */
 extern int fseekll(FILE *fp, long long off, int org);
 extern long long ftellll(FILE *fp);
+
+/* set utf-8 code page */
+extern void setu8cp(void);

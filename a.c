@@ -18,7 +18,7 @@
 /* bar globals */
 char g_cmd = 'h'; /* 't', 'x', 'c', or 'h' */
 const char *g_arfile = NULL; /* archive file name */
-const char *g_dstdir = ".";  /* destination dir or - for stdout */
+const char *g_dstdir = NULL; /* destination dir or - for stdout */
 const char *g_infile = NULL; /* included glob patterns file name */
 const char *g_exfile = NULL; /* excluded glob patterns file name */
 bool g_keepold = false; /* do not owerwrite existing files (-k) */
@@ -759,6 +759,8 @@ int main(int argc, char **argv)
 {
   int opt;
   int patflags = 0;
+
+  setu8cp();
   init_archiver();
 
   setprogname(argv[0]);
@@ -883,7 +885,7 @@ int main(int argc, char **argv)
   switch (g_cmd) {
     case 't': {
       if (!g_arfile) eusage("-f FILE argument is missing");
-      if (g_dstdir) eusage("unexpected -C/-O options in create mode");
+      if (g_dstdir) eusage("unexpected -C/-O options in list mode");
       list(argc-eoptind, argv+eoptind);
     } break;
     case 'c': {
@@ -894,6 +896,7 @@ int main(int argc, char **argv)
     } break;
     case 'x': {
       if (!g_arfile) eusage("-f FILE argument is missing");
+      if (!g_dstdir) g_dstdir = ".";
       extract(argc-eoptind, argv+eoptind);
     } break;
     case 'h': {

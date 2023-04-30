@@ -36,6 +36,7 @@
 #include <direct.h>
 #include <sys/types.h>
 #include <process.h> /* for getpid */
+#include <locale.h> /* for setlocale */
 #include <sys/stat.h> /* for _S_IREAD|_S_IWRITE */
 #include <windows.h>
 #if _MSC_VER >= 1600
@@ -720,3 +721,17 @@ long long ftellll(FILE *fp)
 {
   return ftelli64(fp);
 }
+
+/* set utf-8 code page */
+#ifdef _WIN32 /* works as _WIN64 too */
+void setu8cp(void)
+{
+  setlocale(LC_ALL, ".UTF8");
+  /* system("chcp 65001"); */
+}
+#else
+void setu8cp(void)
+{
+}
+#endif
+
