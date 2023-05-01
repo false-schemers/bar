@@ -23,6 +23,7 @@ const char *g_infile = NULL; /* included glob patterns file name */
 const char *g_exfile = NULL; /* excluded glob patterns file name */
 bool g_keepold = false; /* do not owerwrite existing files (-k) */
 int g_integrity = 0; /* check/calc integrity hashes; 1: SHA256 */
+int g_integerrc = 0; /* extraction integrity error count */
 int g_format = 0; /* 'b': BSAR, 'a': ASAR, 0: check extension */
 dsbuf_t g_inpats; /* list of included patterns */
 dsbuf_t g_expats; /* list of excluded patterns */
@@ -555,7 +556,7 @@ void list(int argc, char **argv)
 
 
 /* copy file via fread/fwrite */
-size_t fcopy(FILE *ifp, FILE *ofp)
+size_t copy_file(FILE *ifp, FILE *ofp)
 {
   size_t bc = 0;
   assert(ifp); assert(ofp);
@@ -565,22 +566,6 @@ size_t fcopy(FILE *ifp, FILE *ofp)
     fwrite(g_buffer, 1, n, ofp);
     bc += n;
     if (n < g_bufsize) break;
-  }
-  return bc;
-}
-
-/* copy file via fread/fwrite */
-size_t fcopyn(FILE *ifp, FILE *ofp, size_t bytec)
-{
-  size_t bc = 0;
-  assert(ifp); assert(ofp);
-  while (bytec > 0) {
-    size_t c = (bytec < g_bufsize) ? bytec : g_bufsize;
-    size_t n = fread(g_buffer, 1, c, ifp);
-    if (!n) break;
-    fwrite(g_buffer, 1, n, ofp);
-    bc += n;
-    bytec -= c;
   }
   return bc;
 }
@@ -683,12 +668,56 @@ void create(int argc, char **argv)
   list_files(NULL, &fdeb, NULL, getverbosity()>0, stdout);
   write_header(format, &fdeb, fp);
   rewind(tfp);
-  fcopy(tfp, fp);
+  copy_file(tfp, fp);
   fclose(tfp);
   fclose(fp);
   fdebfini(&fdeb);
 }
 
+
+/* copy file via fread/fwrite */
+size_t copy_file_n(FILE *ifp, FILE *ofp, size_t bytec, fdent_t *pfde)
+{
+  sha256ctx_t fhash, bhash;
+  uint8_t digest[SHA256DG_SIZE];
+  size_t bc = 0, ibidx = 0; 
+  bool ckint = false;
+  assert(ifp); assert(ofp);
+  if (g_integrity == 1 && pfde->integrity_algorithm == 1) {
+    sha256init(&fhash);
+    ckint = true;
+  }
+  while (bytec > 0) {
+    size_t c = (bytec < g_bufsize) ? bytec : g_bufsize;
+    size_t n = fread(g_buffer, 1, c, ifp);
+    if (!n) break;
+    if (ckint) {
+      sha256init(&bhash);
+      sha256update(&bhash, g_buffer, n);
+      sha256fini(&bhash, digest);
+      if (ibidx < dsblen(&pfde->integrity_blocks)) {
+        if (memcmp(*dsbref(&pfde->integrity_blocks, ibidx), &digest[0], SHA256DG_SIZE) != 0) {
+          logef("Warning: %s: integrity info does not match member block: %s [%d]\n", g_arfile, pfde->name, (int)ibidx);
+        }
+      }
+      ++ibidx;
+      sha256update(&fhash, g_buffer, n);
+    }
+    fwrite(g_buffer, 1, n, ofp);
+    bc += n;
+    bytec -= c;
+  }
+  if (ckint) {
+    sha256fini(&fhash, digest);
+    if (memcmp(pfde->integrity_hash, &digest[0], SHA256DG_SIZE) != 0) {
+      logef("Warning: %s: integrity info does not match member contents: %s\n", g_arfile, pfde->name);
+      g_integerrc += 1;
+    } else {
+      if (getverbosity() > 1) logef("**** integrity checks passed\n");
+    }
+  }
+  return bc;
+}
 
 void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppats, FILE *fp)
 {
@@ -715,7 +744,7 @@ void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppat
       logef("%s\n", sbase);
       if (fseekll(fp, pos, SEEK_SET) != 0) exprintf("%s: seek failed", g_arfile);
       if (streql(g_dstdir, "-")) {
-        n = fcopyn(fp, stdout, fsz);
+        n = copy_file_n(fp, stdout, fsz, pfde);
       } else {
         chbuf_t fcb = mkchb(), dcb = mkchb();
         char *dstdir = trimdirsep(chbsets(&dcb, g_dstdir));
@@ -732,8 +761,12 @@ void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppat
           continue;
         }
         ofp = fopen(dpath, "wb");
-        if (!ofp) exprintf("%s: can't open file for writing:", dpath);
-        else { n = fcopyn(fp, ofp, fsz); fclose(ofp); }
+        if (!ofp) {
+          exprintf("%s: can't open file for writing:", dpath);
+        } else { 
+          n = copy_file_n(fp, ofp, fsz, pfde); 
+          fclose(ofp); 
+        }
         chbfini(&fcb), chbfini(&dcb);
       }
       if (n != fsz) exprintf("%s: unexpected end of archive", g_arfile);
@@ -752,6 +785,10 @@ void extract(int argc, char **argv)
   extract_files(NULL, hsz, &fdeb, dsbempty(&g_inpats) ? NULL : &g_inpats, fp);
   fdebfini(&fdeb);
   fclose(fp);
+  if (g_integerrc > 0) {
+    logef("%s: %d member(s) had integrity problems\n", g_arfile, (int)g_integerrc);
+    exit(1);
+  }
 }
 
 
@@ -870,6 +907,7 @@ int main(int argc, char **argv)
         else if (streql(eoptarg, "quiet")) incquietness();
         else if (streql(eoptarg, "help")) g_cmd = 'h';
         else if (streql(eoptarg, "integrity=SHA256")) g_integrity = 1;
+        else if (streql(eoptarg, "integrity")) g_integrity = 1;
         else if (streql(eoptarg, "old-archive")) g_format = 'a';
         else if (streql(eoptarg, "format=asar")) g_format = 'a';
         else if (streql(eoptarg, "format=bar")) g_format = 'b';
