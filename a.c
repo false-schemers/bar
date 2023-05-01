@@ -910,7 +910,7 @@ int main(int argc, char **argv)
         else if (streql(eoptarg, "integrity")) g_integrity = 1;
         else if (streql(eoptarg, "old-archive")) g_format = 'a';
         else if (streql(eoptarg, "format=asar")) g_format = 'a';
-        else if (streql(eoptarg, "format=bar")) g_format = 'b';
+        else if (streql(eoptarg, "format=bsar")) g_format = 'b';
         else eusage("illegal option: --%s", eoptarg);  
       } break;
     }
