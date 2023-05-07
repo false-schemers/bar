@@ -324,29 +324,29 @@ extern char *trimdirsep(char *pname)
   return pname;
 }
 
-void chbputdirsep(chbuf_t *pcb)
+void cbputdirsep(cbuf_t *pcb)
 {
   assert(pcb);
 #ifdef WIN32
-  chbputc('\\', pcb);
+  cbputc('\\', pcb);
 #else /* Un**x */
-  chbputc('/', pcb);
+  cbputc('/', pcb);
 #endif
 }
 
 #if defined(_MSC_VER)
-static char *fixapath(const char *apath, chbuf_t *pcb)
+static char *fixapath(const char *apath, cbuf_t *pcb)
 {
   /* _wstat & friends don't like dir paths ending in slash */
   size_t len = strlen(apath);
   if (len > 1 && apath[len-2] != ':' && (apath[len-1] == '\\' || apath[len-1] == '/')) {
-    return chbset(pcb, apath, len-1);
+    return cbset(pcb, apath, len-1);
   }
   /* also, they don't like drive current dir's */
   if (len == 2 && isalpha(apath[0]) && apath[1] == ':') {
-    chbsets(pcb, apath);
-    chbputc('.', pcb); /* X:. is ok */
-    return chbdata(pcb);
+    cbsets(pcb, apath);
+    cbputc('.', pcb); /* X:. is ok */
+    return cbdata(pcb);
   }
   /* looks kosher */
   return (char*)apath;
@@ -360,12 +360,12 @@ bool fsstat(const char *path, fsstat_t *ps)
   int res = -1;
   struct _stati64 s;
   DWORD r = 0xffffffff;
-  chbuf_t cb = mkchb();
+  cbuf_t cb = mkcb();
   assert(ps);
   path = fixapath(path, &cb);
   res = _stati64(path, &s);
   if (res < 0 && path[0] == '\\' && path[1] == '\\') r = GetFileAttributesA(path);
-  chbfini(&cb);
+  cbfini(&cb);
   if (res < 0 && r != 0xffffffff && (r & FILE_ATTRIBUTE_DIRECTORY)) {
     /* //server/share - pretend it's a directory */
     ps->isreg = false;
@@ -452,7 +452,7 @@ DIR *opendir(const char *name)
   if (!name || !*name) return NULL;
 
   pwcv = mkbuf(sizeof(wchar_t));
-  file = exmalloc(strlen(name) + 3);
+  file = emalloc(strlen(name) + 3);
   strcpy(file, name);
   if (file[strlen(name) - 1] != '/' && file[strlen(name) - 1] != '\\')
     strcat(file, "/*");
@@ -473,10 +473,10 @@ DIR *opendir(const char *name)
     return NULL;
   }
   
-  ws = excalloc(wcslen(wfile)+1, sizeof(wchar_t));
+  ws = ecalloc(wcslen(wfile)+1, sizeof(wchar_t));
   wcscpy(ws, wfile);
 
-  dir = exmalloc(sizeof(DIR));
+  dir = emalloc(sizeof(DIR));
   dir->mask = ws;
   dir->fd = hnd;
   dir->data = malloc(sizeof(WIN32_FIND_DATAW));
@@ -493,7 +493,7 @@ struct dirent *readdir(DIR *dir)
 {
   static struct dirent entry; /* non-reentrant! */
   WIN32_FIND_DATAW *find;
-  chbuf_t cb; /* to store utf-8 chars */
+  cbuf_t cb; /* to store utf-8 chars */
   char *fname;
   
   assert(dir);
@@ -505,26 +505,26 @@ struct dirent *readdir(DIR *dir)
       return NULL;
   }
 
-  cb = mkchb();
+  cb = mkcb();
   entry.d_off = dir->filepos;
   { /* convert to ANSI code page multibyte */
-    fname = chballoc(&cb, sizeof(entry.d_name));
+    fname = cballoc(&cb, sizeof(entry.d_name));
     if (wcstombs(fname, find->cFileName, sizeof(entry.d_name)) == (size_t)-1)
       fname = NULL;
   }
   if (fname == NULL) {
-    chbfini(&cb);
+    cbfini(&cb);
     return NULL;
   }
   entry.d_reclen = strlen(fname);
   if (entry.d_reclen+1 > sizeof(entry.d_name)) {
-    chbfini(&cb);
+    cbfini(&cb);
     return NULL;
   }
   strncpy(entry.d_name, fname, sizeof(entry.d_name));
   dir->filepos++;
   
-  chbfini(&cb);
+  cbfini(&cb);
   return &entry;
 }
 
@@ -588,7 +588,7 @@ void emkdir(const char *dir)
 {
   assert(dir);
   if (mkdir(dir, 0777) != 0)
-    exprintf("cannot mkdir '%s':", dir);
+    eprintf("cannot mkdir '%s':", dir);
 }
 
 /* ermdir: remove empty last dir on the path, throw errors */
@@ -596,7 +596,7 @@ void ermdir(const char *dir)
 {
   assert(dir);
   if (rmdir(dir) != 0)
-    exprintf("cannot rmdir '%s':", dir);
+    eprintf("cannot rmdir '%s':", dir);
 }
 
 /* split relative path into segments */
@@ -604,17 +604,17 @@ static void rel_splitpath(const char *path, size_t plen, dsbuf_t *psegv)
 {
   dsbclear(psegv);
   if (plen) {
-    chbuf_t cb = mkchb(), cbs = mkchb();
+    cbuf_t cb = mkcb(), cbs = mkcb();
 #ifdef WIN32
     char *sep = "\\/";
 #else /* Un**x */
     char *sep = "/";
 #endif
-    char *str = chbset(&cb, path, plen), *seg;
+    char *str = cbset(&cb, path, plen), *seg;
     while ((seg = strtoken(str, sep, &str, &cbs)) != NULL)
       dsbpushbk(psegv, &seg);
-    chbfini(&cb);
-    chbfini(&cbs);
+    cbfini(&cb);
+    cbfini(&cbs);
   }
 }
 
@@ -624,23 +624,23 @@ void emkdirp(const char *path)
   size_t rlen, plen;
   assert(path);
   if (!pathparse2(path, &rlen, &plen)) {
-    exprintf("cannot mkdirs '%s':", path);
+    eprintf("cannot mkdirs '%s':", path);
   } else {
     size_t i;
-    chbuf_t cb = mkchb();
+    cbuf_t cb = mkcb();
     dsbuf_t segv; dsbinit(&segv);
     rel_splitpath(path+rlen, plen, &segv);
-    chbput(path, rlen, &cb);
+    cbput(path, rlen, &cb);
     /* write back the resulting path */
     for (i = 0; i < dsblen(&segv); ++i) {
       dstr_t *pds = dsbref(&segv, i);
-      if (i > 0) chbputdirsep(&cb);
-      chbputs(*pds, &cb);
-      path = chbdata(&cb);
+      if (i > 0) cbputdirsep(&cb);
+      cbputs(*pds, &cb);
+      path = cbdata(&cb);
       if (!direxists(path))
         emkdir(path);
     }
-    chbfini(&cb);
+    cbfini(&cb);
     dsbfini(&segv);
   }
 }
@@ -681,7 +681,7 @@ FILE *etmpopen(const char *mode)
   assert(mode); /* required but ignored: makes no difference here */
   fp = tmpfile();
 #endif  
-  if (!fp) exprintf("out of temp files");
+  if (!fp) eprintf("out of temp files");
   return fp;
 }
 

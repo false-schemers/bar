@@ -33,7 +33,7 @@ int eoptich = 0;
 
 /* common utility functions */
 
-void exprintf(const char *fmt, ...)
+void eprintf(const char *fmt, ...)
 {
   va_list args;
 
@@ -52,44 +52,44 @@ void exprintf(const char *fmt, ...)
   exit(2); /* conventional value for failed execution */
 }
 
-void *exmalloc(size_t n)
+void *emalloc(size_t n)
 {
   void *p = malloc(n);
-  if (p == NULL) exprintf("malloc() failed:");
+  if (p == NULL) eprintf("malloc() failed:");
   return p;
 }
 
-void *excalloc(size_t n, size_t s)
+void *ecalloc(size_t n, size_t s)
 {
   void *p = calloc(n, s);
-  if (p == NULL) exprintf("calloc() failed:");
+  if (p == NULL) eprintf("calloc() failed:");
   return p;
 }
 
-void *exrealloc(void *m, size_t n)
+void *erealloc(void *m, size_t n)
 {
   void *p = realloc(m, n);
-  if (p == NULL) exprintf("realloc() failed:");
+  if (p == NULL) eprintf("realloc() failed:");
   return p;
 }
 
-char *exstrdup(const char *s)
+char *estrdup(const char *s)
 {
-  char *t = (char *)exmalloc(strlen(s)+1);
+  char *t = (char *)emalloc(strlen(s)+1);
   strcpy(t, s);
   return t;
 }
 
-char *exstrndup(const char* s, size_t n)
+char *estrndup(const char* s, size_t n)
 {
-  char *t = (char *)exmalloc(n+1);
+  char *t = (char *)emalloc(n+1);
   strncpy(t, s, n); t[n] = '\0';
   return t;
 }
 
-char *exmemdup(const char* s, size_t n)
+char *ememdup(const char* s, size_t n)
 {
-  char *t = (char *)exmalloc(n);
+  char *t = (char *)emalloc(n);
   memcpy(t, s, n);
   return t;
 }
@@ -493,7 +493,7 @@ void dsicpy(dstr_t* mem, const dstr_t* pds)
 {
   dstr_t ds = NULL;
   assert(mem); assert(pds);
-  if (*pds) strcpy((ds = exmalloc(strlen(*pds)+1)), *pds);
+  if (*pds) strcpy((ds = emalloc(strlen(*pds)+1)), *pds);
   *mem = ds;
 }
 
@@ -506,7 +506,7 @@ void dscpy(dstr_t* pds, const dstr_t* pdss)
 { 
   dstr_t ds = NULL;
   assert(pds); assert(pdss);
-  if (*pdss) strcpy((ds = exmalloc(strlen(*pdss)+1)), *pdss);
+  if (*pdss) strcpy((ds = emalloc(strlen(*pdss)+1)), *pdss);
   free(*pds); *pds = ds;
 }
 
@@ -514,7 +514,7 @@ void dssets(dstr_t* pds, const char *s)
 {
   dstr_t ds = NULL;
   assert(pds);
-  if (s) strcpy((ds = exmalloc(strlen(s)+1)), s);
+  if (s) strcpy((ds = emalloc(strlen(s)+1)), s);
   free(*pds); *pds = ds;
 }
 
@@ -546,7 +546,7 @@ buf_t* buficpy(buf_t* mem, const buf_t* pb) /* over non-inited */
   mem->fill = pb->fill;
   mem->buf = NULL;
   if (pb->end > 0) {
-    mem->buf = excalloc(pb->end, pb->esz);
+    mem->buf = ecalloc(pb->end, pb->esz);
     memcpy(mem->buf, pb->buf, pb->esz*pb->fill);
   }
   return mem;
@@ -570,7 +570,7 @@ buf_t mkbuf(size_t esz)
 
 buf_t* newbuf(size_t esz)
 {
-  buf_t* pb = (buf_t*)exmalloc(sizeof(buf_t));
+  buf_t* pb = (buf_t*)emalloc(sizeof(buf_t));
   bufinit(pb, esz);
   return pb;
 }
@@ -614,7 +614,7 @@ void bufgrow(buf_t* pb, size_t n)
     size_t oldsz = pb->end;
     size_t newsz = oldsz*2;
     if (oldsz + n > newsz) newsz += n;
-    pb->buf = exrealloc(pb->buf, newsz*pb->esz);
+    pb->buf = erealloc(pb->buf, newsz*pb->esz);
     pb->end = newsz;
   }
 }
@@ -911,25 +911,25 @@ void dsbfini(dsbuf_t* pb)
 
 /* char buffers */
 
-void (chbputc)(int c, chbuf_t* pcb)
+void (cbputc)(int c, cbuf_t* pcb)
 {
   *(char*)bufnewbk(pcb) = (char)c;
 }
 
-void chbput(const char *s, size_t n, chbuf_t* pb)
+void cbput(const char *s, size_t n, cbuf_t* pb)
 {
   size_t l = buflen(pb);
   bufresize(pb, l+n);
   memcpy(l+(char*)pb->buf, s, n);
 }
 
-void chbputs(const char *s, chbuf_t* pb)
+void cbputs(const char *s, cbuf_t* pb)
 {
   size_t n = strlen(s);
-  chbput(s, n, pb);
+  cbput(s, n, pb);
 }
 
-size_t chbwrite(const char *s, size_t sz, size_t c, chbuf_t* pb)
+size_t cbwrite(const char *s, size_t sz, size_t c, cbuf_t* pb)
 {
   size_t n = sz * c;
   if (pb->fill + n > pb->end) bufgrow(pb, n);
@@ -938,26 +938,26 @@ size_t chbwrite(const char *s, size_t sz, size_t c, chbuf_t* pb)
   return c;
 }
 
-void chbputlc(unsigned long uc, chbuf_t* pb)
+void cbputlc(unsigned long uc, cbuf_t* pb)
 {
-  if (uc < 128) chbputc((unsigned char)uc, pb);
+  if (uc < 128) cbputc((unsigned char)uc, pb);
   else {
     char buf[5], *pc = (char *)utf8(uc, (unsigned char *)&buf[0]);
-    chbput(&buf[0], pc-&buf[0], pb);
+    cbput(&buf[0], pc-&buf[0], pb);
   }
 }
 
-void chbputwc(wchar_t wc, chbuf_t* pb)
+void cbputwc(wchar_t wc, cbuf_t* pb)
 {
   assert(WCHAR_MIN <= wc && wc <= WCHAR_MAX);
-  if (wc < 128) chbputc((unsigned char)wc, pb);
+  if (wc < 128) cbputc((unsigned char)wc, pb);
   else {
     char buf[5], *pc = (char *)utf8(wc, (unsigned char *)&buf[0]);
-    chbput(&buf[0], pc-&buf[0], pb);
+    cbput(&buf[0], pc-&buf[0], pb);
   }
 }
 
-void chbputd(int val, chbuf_t* pb)
+void cbputd(int val, cbuf_t* pb)
 {
   char buf[39+1]; /* enough up to 128 bits (w/sign) */
   char *e = &buf[40], *p = e;
@@ -970,10 +970,10 @@ void chbputd(int val, chbuf_t* pb)
       while ((m /= 10) > 0);
     if (val < 0) *--p = '-';
   } else *--p = '0';
-  chbput(p, e-p, pb);
+  cbput(p, e-p, pb);
 }
 
-void chbputld(long val, chbuf_t* pb)
+void cbputld(long val, cbuf_t* pb)
 {
   char buf[39+1]; /* enough up to 128 bits (w/sign) */
   char *e = &buf[40], *p = e;
@@ -986,10 +986,10 @@ void chbputld(long val, chbuf_t* pb)
       while ((m /= 10) > 0);
     if (val < 0) *--p = '-';
   } else *--p = '0';
-  chbput(p, e-p, pb);
+  cbput(p, e-p, pb);
 }
 
-void chbputt(ptrdiff_t val, chbuf_t* pb)
+void cbputt(ptrdiff_t val, cbuf_t* pb)
 {
   char buf[39+1]; /* enough up to 128 bits (w/sign) */
   char *e = &buf[40], *p = e;
@@ -1002,10 +1002,10 @@ void chbputt(ptrdiff_t val, chbuf_t* pb)
       while ((m /= 10) > 0);
     if (val < 0) *--p = '-';
   } else *--p = '0';
-  chbput(p, e-p, pb);
+  cbput(p, e-p, pb);
 }
 
-void chbputu(unsigned val, chbuf_t* pb)
+void cbputu(unsigned val, cbuf_t* pb)
 {
   char buf[39+1]; /* enough up to 128 bits */
   char *e = &buf[40], *p = e;
@@ -1014,10 +1014,10 @@ void chbputu(unsigned val, chbuf_t* pb)
     do *--p = (int)(m%10) + '0';
       while ((m /= 10) > 0);
   } else *--p = '0';
-  chbput(p, e-p, pb);
+  cbput(p, e-p, pb);
 }
 
-void chbputx(unsigned val, chbuf_t* pb)
+void cbputx(unsigned val, cbuf_t* pb)
 {
   char buf[39+1]; /* enough up to 128 bits */
   char *e = &buf[40], *p = e;
@@ -1026,10 +1026,10 @@ void chbputx(unsigned val, chbuf_t* pb)
     do *--p = (int)(d = (m%16), d < 10 ? d + '0' : d-10 + 'a');
       while ((m /= 16) > 0);
   } else *--p = '0';
-  chbput(p, e-p, pb);
+  cbput(p, e-p, pb);
 }
 
-void chbputlu(unsigned long val, chbuf_t* pb)
+void cbputlu(unsigned long val, cbuf_t* pb)
 {
   char buf[39+1]; /* enough up to 128 bits */
   char *e = &buf[40], *p = e;
@@ -1038,10 +1038,10 @@ void chbputlu(unsigned long val, chbuf_t* pb)
     do *--p = (int)(m%10) + '0';
       while ((m /= 10) > 0);
   } else *--p = '0';
-  chbput(p, e-p, pb);
+  cbput(p, e-p, pb);
 }
 
-void chbputllu(unsigned long long val, chbuf_t* pb)
+void cbputllu(unsigned long long val, cbuf_t* pb)
 {
   char buf[39+1]; /* enough up to 128 bits */
   char *e = &buf[40], *p = e;
@@ -1050,10 +1050,10 @@ void chbputllu(unsigned long long val, chbuf_t* pb)
     do *--p = (int)(m%10) + '0';
       while ((m /= 10) > 0);
   } else *--p = '0';
-  chbput(p, e-p, pb);
+  cbput(p, e-p, pb);
 }
 
-void chbputz(size_t val, chbuf_t* pb)
+void cbputz(size_t val, cbuf_t* pb)
 {
   char buf[39+1]; /* enough up to 128 bits */
   char *e = &buf[40], *p = e;
@@ -1062,10 +1062,10 @@ void chbputz(size_t val, chbuf_t* pb)
     do *--p = (int)(m%10) + '0';
       while ((m /= 10) > 0);
   } else *--p = '0';
-  chbput(p, e-p, pb);
+  cbput(p, e-p, pb);
 }
 
-void chbputll(long long val, chbuf_t* pb)
+void cbputll(long long val, cbuf_t* pb)
 {
   char buf[39+1]; /* enough up to 128 bits (w/sign) */
   char *e = &buf[40], *p = e;
@@ -1078,118 +1078,118 @@ void chbputll(long long val, chbuf_t* pb)
       while ((m /= 10) > 0);
     if (val < 0) *--p = '-';
   } else *--p = '0';
-  chbput(p, e-p, pb);
+  cbput(p, e-p, pb);
 }
 
-void chbputg(double v, chbuf_t* pb)
+void cbputg(double v, cbuf_t* pb)
 {
   char buf[100];
   if (v != v) strcpy(buf, "+nan"); 
   else if (v <= -HUGE_VAL) strcpy(buf, "-inf");
   else if (v >= HUGE_VAL)  strcpy(buf, "+inf");
   else sprintf(buf, "%.17g", v); /* see WCSSKAFPA paper */
-  chbputs(buf, pb);
+  cbputs(buf, pb);
 }
 
 /* minimalistic printf to char bufer */
-void chbputvf(chbuf_t* pb, const char *fmt, va_list ap)
+void cbputvf(cbuf_t* pb, const char *fmt, va_list ap)
 {
   assert(pb); assert(fmt);
   while (*fmt) {
     if (*fmt != '%' || *++fmt == '%') {
-      chbputc(*fmt++, pb);
+      cbputc(*fmt++, pb);
     } else if (fmt[0] == 's') {
       char *s = va_arg(ap, char*);
-      chbputs(s, pb); fmt += 1;
+      cbputs(s, pb); fmt += 1;
     } else if (fmt[0] == 'c') {
       int c = va_arg(ap, int);
-      chbputc(c, pb); fmt += 1;
+      cbputc(c, pb); fmt += 1;
     } else if (fmt[0] == 'l' && fmt[1] == 'c') {
       unsigned c = va_arg(ap, unsigned);
-      chbputlc(c, pb); fmt += 2;
+      cbputlc(c, pb); fmt += 2;
     } else if (fmt[0] == 'w' && fmt[1] == 'c') {
       wchar_t c = va_arg(ap, int); /* wchar_t promoted to int */
-      chbputwc(c, pb); fmt += 2;
+      cbputwc(c, pb); fmt += 2;
     } else if (fmt[0] == 'd') {
       int d = va_arg(ap, int);
-      chbputd(d, pb); fmt += 1;
+      cbputd(d, pb); fmt += 1;
     } else if (fmt[0] == 'x') {
       unsigned d = va_arg(ap, unsigned);
-      chbputx(d, pb); fmt += 1;
+      cbputx(d, pb); fmt += 1;
     } else if (fmt[0] == 'l' && fmt[1] == 'd') {
       long ld = va_arg(ap, long);
-      chbputld(ld, pb); fmt += 2;
+      cbputld(ld, pb); fmt += 2;
     } else if (fmt[0] == 'l' && fmt[1] == 'l' && fmt[2] == 'd') {
       long long lld = va_arg(ap, long long);
-      chbputll(lld, pb); fmt += 3;
+      cbputll(lld, pb); fmt += 3;
     } else if (fmt[0] == 't') {
       ptrdiff_t t = va_arg(ap, ptrdiff_t);
-      chbputt(t, pb); fmt += 1;
+      cbputt(t, pb); fmt += 1;
     } else if (fmt[0] == 'u') {
       unsigned u = va_arg(ap, unsigned);
-      chbputu(u, pb); fmt += 1;
+      cbputu(u, pb); fmt += 1;
     } else if (fmt[0] == 'l' && fmt[1] == 'u') {
       unsigned long lu = va_arg(ap, unsigned long);
-      chbputlu(lu, pb); fmt += 2;
+      cbputlu(lu, pb); fmt += 2;
     } else if (fmt[0] == 'l' && fmt[1] == 'l' && fmt[2] == 'u') {
       unsigned long long llu = va_arg(ap, unsigned long long);
-      chbputllu(llu, pb); fmt += 3;
+      cbputllu(llu, pb); fmt += 3;
     } else if (fmt[0] == 'z') {
       size_t z = va_arg(ap, size_t);
-      chbputz(z, pb); fmt += 1;
+      cbputz(z, pb); fmt += 1;
     } else if (fmt[0] == 'g') {
       double g = va_arg(ap, double);
-      chbputg(g, pb); fmt += 1;
+      cbputg(g, pb); fmt += 1;
     } else {
-      assert(0 && !!"unsupported chbputvf format directive");
+      assert(0 && !!"unsupported cbputvf format directive");
       break;
     } 
   }
 }
 
-void chbputf(chbuf_t* pb, const char *fmt, ...)
+void cbputf(cbuf_t* pb, const char *fmt, ...)
 {
   va_list args;
   assert(pb); assert(fmt);
   va_start(args, fmt);
-  chbputvf(pb, fmt, args);
+  cbputvf(pb, fmt, args);
   va_end(args);
 }
 
-void chbput4le(unsigned v, chbuf_t* pb)
+void cbput4le(unsigned v, cbuf_t* pb)
 {
-  chbputc((int)(v & 0xFF), pb); v >>= 8;
-  chbputc((int)(v & 0xFF), pb); v >>= 8;
-  chbputc((int)(v & 0xFF), pb); v >>= 8;
-  chbputc((int)(v & 0xFF), pb);
+  cbputc((int)(v & 0xFF), pb); v >>= 8;
+  cbputc((int)(v & 0xFF), pb); v >>= 8;
+  cbputc((int)(v & 0xFF), pb); v >>= 8;
+  cbputc((int)(v & 0xFF), pb);
 }
 
-void chbput8le(unsigned long long v, chbuf_t* pb)
+void cbput8le(unsigned long long v, cbuf_t* pb)
 {
-  chbputc((int)(v & 0xFF), pb); v >>= 8;
-  chbputc((int)(v & 0xFF), pb); v >>= 8;
-  chbputc((int)(v & 0xFF), pb); v >>= 8;
-  chbputc((int)(v & 0xFF), pb); v >>= 8;
-  chbputc((int)(v & 0xFF), pb); v >>= 8;
-  chbputc((int)(v & 0xFF), pb); v >>= 8;
-  chbputc((int)(v & 0xFF), pb); v >>= 8;
-  chbputc((int)(v & 0xFF), pb);
+  cbputc((int)(v & 0xFF), pb); v >>= 8;
+  cbputc((int)(v & 0xFF), pb); v >>= 8;
+  cbputc((int)(v & 0xFF), pb); v >>= 8;
+  cbputc((int)(v & 0xFF), pb); v >>= 8;
+  cbputc((int)(v & 0xFF), pb); v >>= 8;
+  cbputc((int)(v & 0xFF), pb); v >>= 8;
+  cbputc((int)(v & 0xFF), pb); v >>= 8;
+  cbputc((int)(v & 0xFF), pb);
 }
 
 
-void chbputtime(const char *fmt, const struct tm *tp, chbuf_t* pcb)
+void cbputtime(const char *fmt, const struct tm *tp, cbuf_t* pcb)
 {
   char buf[201]; /* always enough? */
   assert(fmt); assert(pcb);
-  if (tp != NULL && strftime(buf, 200, fmt, tp)) chbputs(buf, pcb);
+  if (tp != NULL && strftime(buf, 200, fmt, tp)) cbputs(buf, pcb);
 }
 
-void chbinsc(chbuf_t* pcb, size_t n, int c)
+void cbinsc(cbuf_t* pcb, size_t n, int c)
 {
   char *pc = bufins(pcb, n); *pc = c;
 }
 
-void chbinss(chbuf_t* pcb, size_t n, const char *s)
+void cbinss(cbuf_t* pcb, size_t n, const char *s)
 {
   while (*s) {
     char *pc = bufins(pcb, n); *pc = *s;
@@ -1197,53 +1197,53 @@ void chbinss(chbuf_t* pcb, size_t n, const char *s)
   }
 }
 
-char* chbset(chbuf_t* pb, const char *s, size_t n)
+char* cbset(cbuf_t* pb, const char *s, size_t n)
 {
   bufclear(pb);
-  chbput(s, n, pb);
-  return chbdata(pb);
+  cbput(s, n, pb);
+  return cbdata(pb);
 }
 
-char* chbsets(chbuf_t* pb, const char *s)
+char* cbsets(cbuf_t* pb, const char *s)
 {
   bufclear(pb);
-  chbputs(s, pb);
-  return chbdata(pb);
+  cbputs(s, pb);
+  return cbdata(pb);
 }
 
-char *chbsetf(chbuf_t* pb, const char *fmt, ...)
+char *cbsetf(cbuf_t* pb, const char *fmt, ...)
 {
   va_list args;
   assert(pb); assert(fmt);
   bufclear(pb);
   va_start(args, fmt);
-  chbputvf(pb, fmt, args);
+  cbputvf(pb, fmt, args);
   va_end(args);
-  return chbdata(pb);
+  return cbdata(pb);
 }
 
-char* chbdata(chbuf_t* pb)
+char* cbdata(cbuf_t* pb)
 {
   *(char*)bufnewbk(pb) = 0;
   pb->fill -= 1;
   return pb->buf; 
 }
 
-void chbcpy(chbuf_t* pb, const chbuf_t* pcb)
+void cbcpy(cbuf_t* pb, const cbuf_t* pcb)
 {
-  size_t n = chblen(pcb);
+  size_t n = cblen(pcb);
   bufresize(pb, n);
   memcpy((char*)pb->buf, (char*)pcb->buf, n);
 }
 
-void chbcat(chbuf_t* pb, const chbuf_t* pcb)
+void cbcat(cbuf_t* pb, const cbuf_t* pcb)
 {
-  size_t i = chblen(pb), n = chblen(pcb);
+  size_t i = cblen(pb), n = cblen(pcb);
   bufresize(pb, i+n);
   memcpy((char*)pb->buf+i, (char*)pcb->buf, n);
 }
 
-dstr_t chbclose(chbuf_t* pb)
+dstr_t cbclose(cbuf_t* pb)
 {
   dstr_t s;
   *(char*)bufnewbk(pb) = 0;
@@ -1251,13 +1251,13 @@ dstr_t chbclose(chbuf_t* pb)
   return s; 
 }
 
-int chbuf_cmp(const void *p1, const void *p2)
+int cbuf_cmp(const void *p1, const void *p2)
 {
-  chbuf_t *pcb1 = (chbuf_t *)p1, *pcb2 = (chbuf_t *)p2; 
+  cbuf_t *pcb1 = (cbuf_t *)p1, *pcb2 = (cbuf_t *)p2; 
   const unsigned char *pc1, *pc2;
   size_t n1, n2, i = 0;
   assert(pcb1); assert(pcb2);
-  n1 = chblen(pcb1), n2 = chblen(pcb2);
+  n1 = cblen(pcb1), n2 = cblen(pcb2);
   pc1 = pcb1->buf, pc2 = pcb2->buf;
   while (i < n1 && i < n2) {
     int d = (int)*pc1++ - (int)*pc2++;
@@ -1268,50 +1268,50 @@ int chbuf_cmp(const void *p1, const void *p2)
   return 0;
 }
 
-char *fgetlb(chbuf_t *pcb, FILE *fp)
+char *fgetlb(cbuf_t *pcb, FILE *fp)
 {
   char buf[256], *line; size_t len;
   assert(fp); assert(pcb);
-  chbclear(pcb);
+  cbclear(pcb);
   line = fgets(buf, 256, fp); /* sizeof(buf) */
   if (!line) return NULL;
   len = strlen(line);
   if (len > 0 && line[len-1] == '\n') {
     line[len-1] = 0;
     if (len > 1 && line[len-2] == '\r') line[len-2] = 0;
-    return chbsets(pcb, line);
+    return cbsets(pcb, line);
   } else for (;;) {
     if (len > 0 && line[len-1] == '\r') line[len-1] = 0;
-    chbputs(line, pcb);
+    cbputs(line, pcb);
     line = fgets(buf, 256, fp); /* sizeof(buf) */
     if (!line) break;
     len = strlen(line);
     if (len > 0 && line[len-1] == '\n') {
       line[len-1] = 0;
       if (len > 1 && line[len-2] == '\r') line[len-2] = 0;
-      chbputs(line, pcb);
+      cbputs(line, pcb);
       break;
     }
   } 
-  return chbdata(pcb);
+  return cbdata(pcb);
 }
 
 /* convert wchar_t string to utf-8 string
  * if rc = 0, return NULL on errors, else subst rc */
-char *wcsto8cb(const wchar_t *wstr, int rc, chbuf_t *pcb)
+char *wcsto8cb(const wchar_t *wstr, int rc, cbuf_t *pcb)
 {
   bool convok = true;
-  chbclear(pcb);
+  cbclear(pcb);
   while (*wstr) {
     unsigned c = (unsigned)*wstr++;
     if (c > 0x1FFFFF) {
-      if (rc) chbputc(rc, pcb);
+      if (rc) cbputc(rc, pcb);
       else { convok = false; break; }
     }
-    chbputlc(c, pcb);
+    cbputlc(c, pcb);
   }
   if (!convok) return NULL;
-  return chbdata(pcb);
+  return cbdata(pcb);
 }
 
 
@@ -1368,7 +1368,7 @@ unsigned long *s8ctoucb(const char *str, unsigned long rc, buf_t *pb)
 }
 
 /* grow pcb to get to the required alignment */
-void binalign(chbuf_t* pcb, size_t align)
+void binalign(cbuf_t* pcb, size_t align)
 {
   size_t addr = buflen(pcb), n;
   assert(align == 1 || align == 2 || align == 4 || align == 8 || align == 16);
@@ -1377,67 +1377,67 @@ void binalign(chbuf_t* pcb, size_t align)
 }
 
 /* lay out numbers as little-endian binary into cbuf */
-void binchar(int c, chbuf_t* pcb) /* align=1 */
+void binchar(int c, cbuf_t* pcb) /* align=1 */
 {
-  chbputc(c, pcb);
+  cbputc(c, pcb);
 }
 
-void binshort(int s, chbuf_t* pcb) /* align=2 */
+void binshort(int s, cbuf_t* pcb) /* align=2 */
 {
   binalign(pcb, 2);
-  chbputc((s >> 0) & 0xFF, pcb);
-  chbputc((s >> 8) & 0xFF, pcb);
+  cbputc((s >> 0) & 0xFF, pcb);
+  cbputc((s >> 8) & 0xFF, pcb);
 }
 
-void binint(int i, chbuf_t* pcb) /* align=4 */
+void binint(int i, cbuf_t* pcb) /* align=4 */
 {
   binalign(pcb, 4);
-  chbputc((i >> 0)  & 0xFF, pcb);
-  chbputc((i >> 8)  & 0xFF, pcb);
-  chbputc((i >> 16) & 0xFF, pcb);
-  chbputc((i >> 24) & 0xFF, pcb);
+  cbputc((i >> 0)  & 0xFF, pcb);
+  cbputc((i >> 8)  & 0xFF, pcb);
+  cbputc((i >> 16) & 0xFF, pcb);
+  cbputc((i >> 24) & 0xFF, pcb);
 }
 
-void binllong(long long ll, chbuf_t* pcb) /* align=8 */
+void binllong(long long ll, cbuf_t* pcb) /* align=8 */
 {
   binalign(pcb, 8);
-  chbputc((ll >> 0)  & 0xFF, pcb);
-  chbputc((ll >> 8)  & 0xFF, pcb);
-  chbputc((ll >> 16) & 0xFF, pcb);
-  chbputc((ll >> 24) & 0xFF, pcb);
-  chbputc((ll >> 32) & 0xFF, pcb);
-  chbputc((ll >> 40) & 0xFF, pcb);
-  chbputc((ll >> 48) & 0xFF, pcb);
-  chbputc((ll >> 56) & 0xFF, pcb);
+  cbputc((ll >> 0)  & 0xFF, pcb);
+  cbputc((ll >> 8)  & 0xFF, pcb);
+  cbputc((ll >> 16) & 0xFF, pcb);
+  cbputc((ll >> 24) & 0xFF, pcb);
+  cbputc((ll >> 32) & 0xFF, pcb);
+  cbputc((ll >> 40) & 0xFF, pcb);
+  cbputc((ll >> 48) & 0xFF, pcb);
+  cbputc((ll >> 56) & 0xFF, pcb);
 }
 
-void binuchar(unsigned uc, chbuf_t* pcb) /* align=1 */
+void binuchar(unsigned uc, cbuf_t* pcb) /* align=1 */
 {
-  chbputc((int)uc, pcb);
+  cbputc((int)uc, pcb);
 }
 
-void binushort(unsigned us, chbuf_t* pcb) /* align=2 */
+void binushort(unsigned us, cbuf_t* pcb) /* align=2 */
 {
   binshort((int)us, pcb);
 }
 
-void binuint(unsigned ui, chbuf_t* pcb) /* align=4 */
+void binuint(unsigned ui, cbuf_t* pcb) /* align=4 */
 {
   binint((int)ui, pcb);
 }
 
-void binullong(unsigned long long ull, chbuf_t* pcb) /* align=8 */
+void binullong(unsigned long long ull, cbuf_t* pcb) /* align=8 */
 {
   binllong((long long)ull, pcb);
 }
 
-void binfloat(float f, chbuf_t* pcb) /* align=4 */
+void binfloat(float f, cbuf_t* pcb) /* align=4 */
 {
   union { int i; float f; } inf; inf.f = f;
   binint(inf.i, pcb); 
 }
 
-void bindouble(double d, chbuf_t* pcb) /* align=8 */
+void bindouble(double d, cbuf_t* pcb) /* align=8 */
 {
   union { long long ll; double d; } ind; ind.d = d;
   binllong(ind.ll, pcb); 
@@ -1447,7 +1447,7 @@ void bindouble(double d, chbuf_t* pcb) /* align=8 */
 /* strtok replacement */
 
 /* usage: while ((tok = strtoken(str, sep, &str, pcb) != NULL) ...;  */
-char *strtoken(const char *str, const char *sep, char** ep, chbuf_t *pcb)
+char *strtoken(const char *str, const char *sep, char** ep, cbuf_t *pcb)
 {
   size_t n; assert(sep); assert(pcb);
   if (ep) *ep = NULL; /* reset ep */
@@ -1455,7 +1455,7 @@ char *strtoken(const char *str, const char *sep, char** ep, chbuf_t *pcb)
   str += strspn(str, sep); /* skip leading seps */
   if (!(n = strcspn(str, sep))) return NULL; /* measure token */
   if (ep) *ep = (char*)str + n; /* set ep to first char after token */
-  return chbset(pcb, str, n); /* copy token to pcb and return pcb data */
+  return cbset(pcb, str, n); /* copy token to pcb and return pcb data */
 }
 
 
@@ -1482,8 +1482,8 @@ sym_t intern(const char *name)
   size_t i, j; int sym;
   if (name == NULL) return (sym_t)0;
   if (g_symt.sz == 0) { /* init */
-    g_symt.a = excalloc(64, sizeof(char*));
-    g_symt.v = excalloc(64, sizeof(char**));
+    g_symt.a = ecalloc(64, sizeof(char*));
+    g_symt.v = ecalloc(64, sizeof(char**));
     g_symt.sz = 64, g_symt.maxu = 64 / 2;
     i = hashs(name) & (g_symt.sz-1);
   } else {
@@ -1492,8 +1492,8 @@ sym_t intern(const char *name)
       if (strcmp(name, *g_symt.v[i]) == 0) return (sym_t)(g_symt.v[i]-g_symt.a+1);
     if (g_symt.u == g_symt.maxu) { /* rehash */
       size_t nsz = g_symt.sz * 2;
-      char **na = excalloc(nsz, sizeof(char*));
-      char ***nv = excalloc(nsz, sizeof(char**));
+      char **na = ecalloc(nsz, sizeof(char*));
+      char ***nv = ecalloc(nsz, sizeof(char**));
       for (i = 0; i < g_symt.sz; i++)
         if (g_symt.v[i]) {
           for (j = hashs(*g_symt.v[i]) & (nsz-1); nv[j]; j = (j-1) & (nsz-1)) ;
@@ -1505,20 +1505,20 @@ sym_t intern(const char *name)
     }
   }
   *(g_symt.v[i] = g_symt.a + g_symt.u) = 
-    strcpy(exmalloc(strlen(name)+1), name);
+    strcpy(emalloc(strlen(name)+1), name);
   sym = (int)((g_symt.u)++);
   return (sym_t)(sym+1);
 }
 
 sym_t internf(const char *fmt, ...)
 {
-  va_list args; sym_t s; chbuf_t cb; 
-  assert(fmt); chbinit(&cb);
+  va_list args; sym_t s; cbuf_t cb; 
+  assert(fmt); cbinit(&cb);
   va_start(args, fmt);
-  chbputvf(&cb, fmt, args);
+  cbputvf(&cb, fmt, args);
   va_end(args);
-  s = intern(chbdata(&cb));
-  chbfini(&cb);
+  s = intern(cbdata(&cb));
+  cbfini(&cb);
   return s;
 }
 
@@ -1830,7 +1830,7 @@ void setprogname(const char *str)
   char *pname;
   assert(str);
   str = getfname(str);
-  pname = exstrndup(str, spanfbase(str));
+  pname = estrndup(str, spanfbase(str));
   g_progname = pname;
 }
 
@@ -1845,7 +1845,7 @@ const char *usage(void)
 /* setusage: set stored usage string */
 void setusage(const char *str)
 {
-  g_usage = exstrdup(str);
+  g_usage = estrdup(str);
 }
 
 /* eusage: report wrong usage */
@@ -2070,9 +2070,9 @@ static oi_t FILE_oi = {
 poi_t FILE_poi = &FILE_oi; 
 
 static oi_t cbuf_oi = {
-  (int (*)(int, void*))chbputc,
-  (int (*)(const char*, void*))chbputs,
-  (size_t (*)(const void*, size_t, size_t, void*))chbwrite,
+  (int (*)(int, void*))cbputc,
+  (int (*)(const char*, void*))cbputs,
+  (size_t (*)(const void*, size_t, size_t, void*))cbwrite,
   null_flush,
   null_ctl
 };
@@ -2097,7 +2097,7 @@ typedef struct jfile_tag {
   int tt; /* lookahead token type or -1 */
   bool autoflush;
   /* tmp bufs */
-  chbuf_t tbuf; /* token */
+  cbuf_t tbuf; /* token */
 } jfile_t;
 
 static void jfile_init_ii(jfile_t* pjf, pii_t pii, void* dp, bool bbuf)
@@ -2116,7 +2116,7 @@ static void jfile_init_ii(jfile_t* pjf, pii_t pii, void* dp, bool bbuf)
   pjf->indent = 0;
   pjf->tt = -1;
   pjf->autoflush = !bbuf;
-  chbinit(&pjf->tbuf);
+  cbinit(&pjf->tbuf);
 }
 
 static void jfile_init_oi(jfile_t* pjf, poi_t poi, void* dp, bool bbuf)
@@ -2135,13 +2135,13 @@ static void jfile_init_oi(jfile_t* pjf, poi_t poi, void* dp, bool bbuf)
   pjf->indent = 0;
   pjf->tt = -1;
   pjf->autoflush = !bbuf;
-  chbinit(&pjf->tbuf);
+  cbinit(&pjf->tbuf);
 }
 
 static void jfile_fini(jfile_t* pjf) 
 {
   free(pjf->fname); 
-  chbfini(&pjf->tbuf);
+  cbfini(&pjf->tbuf);
 }
 
 static void jfile_close(jfile_t* pjf) 
@@ -2159,10 +2159,10 @@ static void jfile_verr(bool in, jfile_t* pjf, const char *fmt, va_list args)
 {
   assert(pjf);
   assert(fmt);
-  chbclear(&pjf->tbuf);
-  chbputvf(&pjf->tbuf, fmt, args);
+  cbclear(&pjf->tbuf);
+  cbputvf(&pjf->tbuf, fmt, args);
   /* for now, just print error and exit; todo: longjmp */
-  fprintf(stderr, "JSON error: %s\naborting execution...", chbdata(&pjf->tbuf));
+  fprintf(stderr, "JSON error: %s\naborting execution...", cbdata(&pjf->tbuf));
   exit(EXIT_FAILURE);
 }
 
@@ -2202,60 +2202,60 @@ typedef enum jtoken_tag {
 } jtoken_t;
 
 /* jlex: splits input into tokens delivered via char buf [from jsonlex.ss, patched!] */
-static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *in, chbuf_t *pcb)
+static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *in, cbuf_t *pcb)
 {
   int c; 
   bool gotminus = false;
   assert(pcb);
 
-  chbclear(pcb);
+  cbclear(pcb);
   goto state_0;
   state_0:
     c = in_getc(in);
     if (c == EOF) {
       goto err;
     } else if (c == ':') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_14;
     } else if (c == ',') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_13;
     } else if (c == '}') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_12;
     } else if (c == '{') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_11;
     } else if (c == ']') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_10;
     } else if (c == '[') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_9;
     } else if (c == '\"') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_8;
     } else if (c == '-') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       gotminus = true;
       goto state_7;
     } else if (c == '0') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_6;
     } else if ((c >= '1' && c <= '9')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_5;
     } else if (c == 'f') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_4;
     } else if (c == 't') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_3;
     } else if (c == 'n') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_2;
     } else if (c == '\t' || c == '\n' || c == '\r' || c == ' ') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_1;
     } else {
       in_ungetc(c, in);
@@ -2266,7 +2266,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       return JTK_WHITESPACE;
     } else if (c == '\t' || c == '\n' || c == '\r' || c == ' ') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_1;
     } else {
       in_ungetc(c, in);
@@ -2277,7 +2277,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == 'u') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_33;
     } else {
       in_ungetc(c, in);
@@ -2288,7 +2288,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == 'r') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_30;
     } else {
       in_ungetc(c, in);
@@ -2299,7 +2299,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == 'a') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_26;
     } else {
       in_ungetc(c, in);
@@ -2310,13 +2310,13 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       return gotminus ? JTK_INT : JTK_UINT;
     } else if (c == '.') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_22;
     } else if (c == 'E' || c == 'e') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_21;
     } else if ((c >= '0' && c <= '9')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_5;
     } else {
       in_ungetc(c, in);
@@ -2327,10 +2327,10 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       return gotminus ? JTK_INT : JTK_UINT;
     } else if (c == '.') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_22;
     } else if (c == 'E' || c == 'e') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_21;
     } else {
       in_ungetc(c, in);
@@ -2341,10 +2341,10 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == '0') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_6;
     } else if ((c >= '1' && c <= '9')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_5;
     } else {
       in_ungetc(c, in);
@@ -2355,14 +2355,14 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == '\\') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_16;
     } else if (c == '\"') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_15;
     } else if (!((c >= 0x00 && c <= 0x1F) /* this place is patched! */
                  || c == '\"' || c == '\\')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_8;
     } else {
       in_ungetc(c, in);
@@ -2387,10 +2387,10 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == 'u') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_17;
     } else if (c == '\"' || c == '/' || c == '\\' || c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_8;
     } else {
       in_ungetc(c, in);
@@ -2401,7 +2401,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_18;
     } else {
       in_ungetc(c, in);
@@ -2412,7 +2412,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_19;
     } else {
       in_ungetc(c, in);
@@ -2423,7 +2423,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_20;
     } else {
       in_ungetc(c, in);
@@ -2434,7 +2434,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_8;
     } else {
       in_ungetc(c, in);
@@ -2445,10 +2445,10 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == '+' || c == '-') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_25;
     } else if ((c >= '0' && c <= '9')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_24;
     } else {
       in_ungetc(c, in);
@@ -2459,7 +2459,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if ((c >= '0' && c <= '9')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_23;
     } else {
       in_ungetc(c, in);
@@ -2470,10 +2470,10 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       return JTK_FLOAT;
     } else if ((c >= '0' && c <= '9')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_23;
     } else if (c == 'E' || c == 'e') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_21;
     } else {
       in_ungetc(c, in);
@@ -2484,7 +2484,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       return JTK_FLOAT;
     } else if ((c >= '0' && c <= '9')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_24;
     } else {
       in_ungetc(c, in);
@@ -2495,7 +2495,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if ((c >= '0' && c <= '9')) {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_24;
     } else {
       in_ungetc(c, in);
@@ -2506,7 +2506,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == 'l') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_27;
     } else {
       in_ungetc(c, in);
@@ -2517,7 +2517,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == 's') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_28;
     } else {
       in_ungetc(c, in);
@@ -2528,7 +2528,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == 'e') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_29;
     } else {
       in_ungetc(c, in);
@@ -2541,7 +2541,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == 'u') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_31;
     } else {
       in_ungetc(c, in);
@@ -2552,7 +2552,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == 'e') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_32;
     } else {
       in_ungetc(c, in);
@@ -2565,7 +2565,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == 'l') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_34;
     } else {
       in_ungetc(c, in);
@@ -2576,7 +2576,7 @@ static jtoken_t jlex(int (*in_getc)(void*), int (*in_ungetc)(int, void*), void *
     if (c == EOF) {
       goto err;
     } else if (c == 'l') {
-      chbputc(c, pcb);
+      cbputc(c, pcb);
       goto state_35;
     } else {
       in_ungetc(c, in);
@@ -2597,7 +2597,7 @@ static jtoken_t jfile_peekt(jfile_t* pjf)
     assert(pjf->tt > JTK_WHITESPACE && pjf->tt <= JTK_EOF);
     return (jtoken_t)pjf->tt; 
   } 
-  assert(chbempty(&pjf->tbuf));
+  assert(cbempty(&pjf->tbuf));
   for (;;) {
     jtoken_t tk = jlex(pjf->getc, pjf->ungetc, pjf->pfile, &pjf->tbuf);
     if (tk == JTK_EOF) {
@@ -2605,7 +2605,7 @@ static jtoken_t jfile_peekt(jfile_t* pjf)
       if (c == EOF) { 
         /* real EOF */
         pjf->tt = JTK_EOF;
-        chbclear(&pjf->tbuf);
+        cbclear(&pjf->tbuf);
         return JTK_EOF;
       } else {
         /* lex error */
@@ -2613,8 +2613,8 @@ static jtoken_t jfile_peekt(jfile_t* pjf)
         jfile_ierr(pjf, "unexpected character: %c", c);
       }
     } else if (tk == JTK_WHITESPACE) {
-      pjf->lineno += (int)strcnt(chbdata(&pjf->tbuf), '\n');
-      chbclear(&pjf->tbuf);
+      pjf->lineno += (int)strcnt(cbdata(&pjf->tbuf), '\n');
+      cbclear(&pjf->tbuf);
       continue;
     } else {
       pjf->tt = tk;
@@ -2629,17 +2629,17 @@ static void jfile_dropt(jfile_t* pjf)
   /* clear lookehead unless it is real EOF */
   if (pjf->tt >= 0 && pjf->tt != JTK_EOF) {
     pjf->tt = -1;
-    chbclear(&pjf->tbuf);
+    cbclear(&pjf->tbuf);
   }
 }
 
 /* decode lookahead string token as utf-8 into pcb */
-static char* jfile_tstring(jfile_t* pjf, chbuf_t* pcb)
+static char* jfile_tstring(jfile_t* pjf, cbuf_t* pcb)
 {
   char *ts; int32_t c32h = 0;
   assert(pjf->tt == JTK_STRING);
-  chbclear(pcb);
-  ts = chbdata(&pjf->tbuf);
+  cbclear(pcb);
+  ts = cbdata(&pjf->tbuf);
   /* convert surrogate pairs to normal unicode chars */
   assert(*ts == '\"');
   for (ts += 1; *ts != '\"'; ) {
@@ -2664,56 +2664,56 @@ static char* jfile_tstring(jfile_t* pjf, chbuf_t* pcb)
       c32 = ((c32h - 0xD800) << 10) + (c32 - 0xDC00);
       c32h = 0;
     }
-    chbputlc(c32, pcb);
+    cbputlc(c32, pcb);
   }
   /* check for incomplete surrogates */
   if (c32h != 0) jfile_ierr(pjf, "surrogate char sequence error");
   /* note: pcb may legally contain zeroes! */
-  return chbdata(pcb);
+  return cbdata(pcb);
 }
 
 /* decode lookahead string token as hex sequence into pcb */
-static char* jfile_tbin(jfile_t* pjf, chbuf_t* pcb)
+static char* jfile_tbin(jfile_t* pjf, cbuf_t* pcb)
 {
   char *ts; int32_t c32h = 0;
   assert(pjf->tt == JTK_STRING);
-  chbclear(pcb);
-  ts = chbdata(&pjf->tbuf);
+  cbclear(pcb);
+  ts = cbdata(&pjf->tbuf);
   /* convert hex pairs to bytes */
   assert(*ts == '\"');
   hexdecode(ts+1, pcb); /* stops at " */
-  if (1+chblen(pcb)*2+1 != chblen(&pjf->tbuf)) jfile_ierr(pjf, "hex sequence error");
+  if (1+cblen(pcb)*2+1 != cblen(&pjf->tbuf)) jfile_ierr(pjf, "hex sequence error");
   /* note: pcb may legally contain zeroes! */
-  return chbdata(pcb);
+  return cbdata(pcb);
 }
 
 /* encode utf-8 string of length n into token buf */
 static void jfile_tunstring(jfile_t* pjf, const char *str, size_t n)
 {
-  chbuf_t *pcb = &pjf->tbuf; char buf[40];
-  chbclear(pcb);
-  chbputc('\"', pcb);
+  cbuf_t *pcb = &pjf->tbuf; char buf[40];
+  cbclear(pcb);
+  cbputc('\"', pcb);
   while (n > 0) {
     int32_t c32; char *end;
     int c = *str & 0xFF;
     /* check for control chars manually */
     if (c <= 0x1F) {
       switch (c) {
-        case '\b' : chbputs("\\b", pcb); break;
-        case '\f' : chbputs("\\f", pcb); break;
-        case '\n' : chbputs("\\n", pcb); break;
-        case '\r' : chbputs("\\r", pcb); break;
-        case '\t' : chbputs("\\t", pcb); break;
-        default   : sprintf(buf, "\\u%.4X", c); chbputs(buf, pcb); break;
+        case '\b' : cbputs("\\b", pcb); break;
+        case '\f' : cbputs("\\f", pcb); break;
+        case '\n' : cbputs("\\n", pcb); break;
+        case '\r' : cbputs("\\r", pcb); break;
+        case '\t' : cbputs("\\t", pcb); break;
+        default   : sprintf(buf, "\\u%.4X", c); cbputs(buf, pcb); break;
       }
       ++str; --n;
       continue;
     } else if (c == '\"' || c == '\\') {
       /* note: / can be left unescaped */
       switch (c) {
-        case '\"' : chbputs("\\\"", pcb); break;
-        case '\\' : chbputs("\\\\", pcb); break;
-        case '/' :  chbputs("\\/", pcb); break;
+        case '\"' : cbputs("\\\"", pcb); break;
+        case '\\' : cbputs("\\\\", pcb); break;
+        case '/' :  cbputs("\\/", pcb); break;
       }
       ++str; --n;
       continue;
@@ -2728,33 +2728,33 @@ static void jfile_tunstring(jfile_t* pjf, const char *str, size_t n)
     } else if (c32 <= 0x80) {
       /* put ascii chars as-is */
       assert(c32 == c && end == str+1);
-      chbputc(c, pcb);
+      cbputc(c, pcb);
     } else if (c32 <= 0xFFFF) {
       /* BMP (TODO: check for non-chars such as U+FFFF and surrogates!) */
       /* if ??? jfile_ierr(pjf, "invalid utf-8 encoding: %.10s...", str); */
       /* was: cbput8c(c32, pcb); */
-      sprintf(buf, "\\u%.4X", (int)c32); chbputs(buf, pcb);
+      sprintf(buf, "\\u%.4X", (int)c32); cbputs(buf, pcb);
     } else if (c32 <= 0x10FFFF) {
       /* legal space above bmp; encode as two surrogates */
       int32_t v = c32 - 0x10000, c1 = 0xD800 + ((v >> 10) & 0x3FF), c2 = 0xDC00 + (v & 0x3FF);
-      sprintf(buf, "\\u%.4X\\u%.4X", c1, c2); chbputs(buf, pcb);
+      sprintf(buf, "\\u%.4X\\u%.4X", c1, c2); cbputs(buf, pcb);
     } else {
       /* char outside Unicode range? */
       jfile_ierr(pjf, "nonstandard utf-8 encoding: %s", str);
     }
     n -= (size_t)(end-str); str = end;
   }
-  chbputc('\"', pcb);
+  cbputc('\"', pcb);
 }
 
 /* encode binary sequence of length n into token buf as string */
 static void jfile_tunbin(jfile_t* pjf, const void *mem, size_t n)
 {
-  chbuf_t *pcb = &pjf->tbuf;
-  chbclear(pcb);
+  cbuf_t *pcb = &pjf->tbuf;
+  cbclear(pcb);
   hexnencode(mem, n, pcb);
-  chbinsc(pcb, 0, '\"');
-  chbputc('\"', pcb);
+  cbinsc(pcb, 0, '\"');
+  cbputc('\"', pcb);
 }
 
 /* decode lookahead number token */
@@ -2762,7 +2762,7 @@ static double jfile_tnumberd(jfile_t* pjf)
 {
   char *ts; double d;
   assert(pjf->tt >= JTK_INT && pjf->tt <= JTK_FLOAT);
-  ts = chbdata(&pjf->tbuf);
+  ts = cbdata(&pjf->tbuf);
   d = strtod(ts, &ts);
   assert(ts && !*ts);
   return d;
@@ -2772,12 +2772,12 @@ static double jfile_tnumberd(jfile_t* pjf)
 static void jfile_tunnumberd(jfile_t* pjf, double num)
 {
   char buf[30], *pc = buf;
-  chbuf_t *pcb = &pjf->tbuf;
+  cbuf_t *pcb = &pjf->tbuf;
   sprintf(buf, "%.15g", num);
   /* the format above may produce [-]{inf...|nan...} */
   if (*pc == '-') ++pc;
   if (!isdigit(*pc)) jfile_ierr(pjf, "not a number: %s", buf);
-  chbsets(pcb, buf);
+  cbsets(pcb, buf);
 }
 
 /* decode lookahead number token as long long */
@@ -2785,7 +2785,7 @@ static long long jfile_tnumberll(jfile_t* pjf)
 {
   char *ts, *end, *dd; long long ll;
   assert(pjf->tt == JTK_INT || pjf->tt == JTK_UINT);
-  ts = chbdata(&pjf->tbuf);
+  ts = cbdata(&pjf->tbuf);
   dd = *ts == '-' ? ts+1 : ts;
   if (strspn(dd, STR_09) != strlen(dd)) jfile_ierr(pjf, "not an integer number: %s", ts);
   errno = 0;
@@ -2798,9 +2798,9 @@ static long long jfile_tnumberll(jfile_t* pjf)
 /* encode number into token buf as long long */
 static void jfile_tunnumberll(jfile_t* pjf, long long num)
 {
-  chbuf_t *pcb = &pjf->tbuf;
-  chbclear(pcb);
-  chbputll(num, pcb);
+  cbuf_t *pcb = &pjf->tbuf;
+  cbclear(pcb);
+  cbputll(num, pcb);
 }
 
 /* decode lookahead number token as unsigned long long */
@@ -2808,7 +2808,7 @@ static unsigned long long jfile_tnumberull(jfile_t* pjf)
 {
   char *ts, *end; unsigned long long ull;
   assert(pjf->tt == JTK_UINT);
-  ts = chbdata(&pjf->tbuf);
+  ts = cbdata(&pjf->tbuf);
   if (strspn(ts, STR_09) != strlen(ts)) jfile_ierr(pjf, "not an unsigned integer number: %s", ts);
   errno = 0;
   ull = strtoull(ts, &end, 10); /* yes, it may overflow */
@@ -2820,9 +2820,9 @@ static unsigned long long jfile_tnumberull(jfile_t* pjf)
 /* encode number into token buf as unsigned long long */
 static void jfile_tunnumberull(jfile_t* pjf, unsigned long long num)
 {
-  chbuf_t *pcb = &pjf->tbuf;
-  chbclear(pcb);
-  chbputllu(num, pcb);
+  cbuf_t *pcb = &pjf->tbuf;
+  cbclear(pcb);
+  cbputllu(num, pcb);
 }
 
 /* output a single char to pjf */
@@ -2840,7 +2840,7 @@ static void jfile_puts(const char *s, jfile_t* pjf)
 /* output contents of token buf to pjf */
 static void jfile_putt(jfile_t* pjf) 
 {
-  (pjf->puts)(chbdata(&pjf->tbuf), pjf->pfile);
+  (pjf->puts)(cbdata(&pjf->tbuf), pjf->pfile);
 }
 
 /* indent output by pjf->indent positions */
@@ -2869,7 +2869,7 @@ static void jfile_flush(jfile_t* pjf)
 static void jfinit_ii(JFILE* pf, pii_t pii, void *dp, bool bbuf) 
 {
   memset(pf, 0, sizeof(JFILE));
-  pf->pjf = exmalloc(sizeof(jfile_t));
+  pf->pjf = emalloc(sizeof(jfile_t));
   jfile_init_ii(pf->pjf, pii, dp, bbuf);
   pf->ownsfile = false;
   pf->loading = true;
@@ -2879,7 +2879,7 @@ static void jfinit_ii(JFILE* pf, pii_t pii, void *dp, bool bbuf)
 static void jfinit_oi(JFILE* pf, poi_t poi, void *dp, bool bbuf) 
 {
   memset(pf, 0, sizeof(JFILE));
-  pf->pjf = exmalloc(sizeof(jfile_t));
+  pf->pjf = emalloc(sizeof(jfile_t));
   jfile_init_oi(pf->pjf, poi, dp, bbuf);
   pf->ownsfile = false;
   pf->loading = false;
@@ -2890,7 +2890,7 @@ JFILE* newjfii(pii_t pii, void *dp)
 {
   JFILE* pf;
   assert(pii);
-  pf = exmalloc(sizeof(JFILE));
+  pf = emalloc(sizeof(JFILE));
   jfinit_ii(pf, pii, dp, true); 
   return pf;
 }
@@ -2899,7 +2899,7 @@ JFILE* newjfoi(poi_t poi, void *dp)
 {
   JFILE* pf;
   assert(poi);
-  pf = exmalloc(sizeof(JFILE));
+  pf = emalloc(sizeof(JFILE));
   jfinit_oi(pf, poi, dp, true); 
   return pf;
 }
@@ -3040,7 +3040,7 @@ bool jfatcbrc(JFILE* pf)  /* ...]? */
   /* out states: S_AT_KEY S_AT_CBRC */
 }
 
-char* jfgetkey(JFILE* pf, chbuf_t* pcb) /* "key": */
+char* jfgetkey(JFILE* pf, cbuf_t* pcb) /* "key": */
 {
   /* legal in states: S_AFTER_VALUE S_AT_KEY */
   jtoken_t t; char *key;
@@ -3220,7 +3220,7 @@ unsigned long long jfgetnumull(JFILE* pf) /* num as unsigned long long */
   /* out states: S_AFTER_VALUE */
 }
 
-char* jfgetstr(JFILE* pf, chbuf_t* pcb)
+char* jfgetstr(JFILE* pf, cbuf_t* pcb)
 {
   /* legal in states: S_AFTER_VALUE S_AT_VALUE */
   jtoken_t t; char *s;
@@ -3243,7 +3243,7 @@ char* jfgetstr(JFILE* pf, chbuf_t* pcb)
   /* out states: S_AFTER_VALUE */
 }
 
-char* jfgetbin(JFILE* pf, chbuf_t* pcb)
+char* jfgetbin(JFILE* pf, cbuf_t* pcb)
 {
   /* legal in states: S_AFTER_VALUE S_AT_VALUE */
   jtoken_t t; char *s;
@@ -3456,9 +3456,9 @@ typedef struct bfile_tag {
   dstr_t fname;
   bvtype_t dvt; /* doc val type (in) */  
   bvtype_t kvt; /* key val type (in) */  
-  chbuf_t kbuf; /* key buf (i/o) */
+  cbuf_t kbuf; /* key buf (i/o) */
   buf_t parvts; /* stack of parent vts (in) */
-  buf_t chbufs; /* stack of tmp bufs (out) */
+  buf_t cbufs; /* stack of tmp bufs (out) */
   buf_t counts; /* stack of counts (out) */
 } bfile_t;
 
@@ -3476,9 +3476,9 @@ static void bfile_init_ii(bfile_t* pbf, pii_t pii, void* dp, bool bbuf)
   pbf->flush = null_poi->flush;
   pbf->dvt = BVT_OBJ;
   pbf->kvt = 0;
-  chbinit(&pbf->kbuf);
+  cbinit(&pbf->kbuf);
   bufinit(&pbf->parvts, sizeof(bvtype_t));
-  bufinit(&pbf->chbufs, sizeof(chbuf_t));
+  bufinit(&pbf->cbufs, sizeof(cbuf_t));
   bufinit(&pbf->counts, sizeof(int));
 }
 
@@ -3496,9 +3496,9 @@ static void bfile_init_oi(bfile_t* pbf, poi_t poi, void* dp, bool bbuf)
   pbf->flush = poi->flush;
   pbf->dvt = BVT_OBJ;
   pbf->kvt = 0;
-  chbinit(&pbf->kbuf);
+  cbinit(&pbf->kbuf);
   bufinit(&pbf->parvts, sizeof(bvtype_t));
-  bufinit(&pbf->chbufs, sizeof(chbuf_t));
+  bufinit(&pbf->cbufs, sizeof(cbuf_t));
   bufinit(&pbf->counts, sizeof(int));
 }
 
@@ -3506,10 +3506,10 @@ static void bfile_fini(bfile_t* pbf)
 {
   size_t i;
   free(pbf->fname); 
-  chbfini(&pbf->kbuf);
+  cbfini(&pbf->kbuf);
   buffini(&pbf->parvts);
-  for (i = 0; i < buflen(&pbf->chbufs); ++i) chbfini(bufref(&pbf->chbufs, i)); 
-  buffini(&pbf->chbufs);
+  for (i = 0; i < buflen(&pbf->cbufs); ++i) cbfini(bufref(&pbf->cbufs, i)); 
+  buffini(&pbf->cbufs);
   buffini(&pbf->counts);
 }
 
@@ -3528,10 +3528,10 @@ static void bfile_verr(bool in, bfile_t* pbf, const char *fmt, va_list args)
 {
   assert(pbf);
   assert(fmt);
-  chbclear(&pbf->kbuf);
-  chbputvf(&pbf->kbuf, fmt, args);
+  cbclear(&pbf->kbuf);
+  cbputvf(&pbf->kbuf, fmt, args);
   /* for now, just print error and exit; todo: longjmp */
-  fprintf(stderr, "BSON error: %s\naborting execution...", chbdata(&pbf->kbuf));
+  fprintf(stderr, "BSON error: %s\naborting execution...", cbdata(&pbf->kbuf));
   exit(EXIT_FAILURE);
 }
 
@@ -3566,15 +3566,15 @@ static const char* bfile_getkey(bfile_t* pbf)
     pbf->kvt = pbf->getc(pbf->pfile);
     if (pbf->kvt == 0) bfile_ierr(pbf, "peek at end of obj/array");
     if (!supported_vt(pbf->kvt)) bfile_ierr(pbf, "unsupported type code: %d", pbf->kvt);
-    chbclear(&pbf->kbuf);
+    cbclear(&pbf->kbuf);
     while (true) { 
       int c = pbf->getc(pbf->pfile); 
       if (c == EOF) bfile_ierr(pbf, "unexpected end-of-file");
       if (c == 0) break;
-      chbputc(c, &pbf->kbuf);
+      cbputc(c, &pbf->kbuf);
     }
   }
-  return chbdata(&pbf->kbuf);
+  return cbdata(&pbf->kbuf);
 }
 
 static bvtype_t bfile_peekvt(bfile_t* pbf)
@@ -3677,7 +3677,7 @@ static double bfile_getfloat(bfile_t* pbf)
   return v.f;
 }
 
-static char* bfile_getstr(bfile_t* pbf, chbuf_t* pcb)
+static char* bfile_getstr(bfile_t* pbf, cbuf_t* pcb)
 {
   uint8_t b[4]; unsigned n; uint32_t v;
   if (pbf->dvt == BVT_ARR) bfile_getkey(pbf);
@@ -3685,14 +3685,14 @@ static char* bfile_getstr(bfile_t* pbf, chbuf_t* pcb)
   v = ((uint32_t)b[3] << 24) | ((uint32_t)b[2] << 16) 
     | ((uint32_t)b[1] << 8)  |  (uint32_t)b[0];
   if (pbf->kvt != BVT_STR || n != 4 || !v) bfile_ierr(pbf, "string expected");
-  chbclear(pcb); 
-  n = (unsigned)pbf->read(chballoc(pcb, v-1), 1, v-1, pbf->pfile);
+  cbclear(pcb); 
+  n = (unsigned)pbf->read(cballoc(pcb, v-1), 1, v-1, pbf->pfile);
   if (n != v-1 || pbf->getc(pbf->pfile) != 0) bfile_ierr(pbf, "missing end of string");
   pbf->kvt = 0;
-  return chbdata(pcb);
+  return cbdata(pcb);
 }
 
-static void bfile_getbin(bfile_t* pbf, chbuf_t* pcb)
+static void bfile_getbin(bfile_t* pbf, cbuf_t* pcb)
 {
   uint8_t b[4]; unsigned n; int st; uint32_t v;
   if (pbf->dvt == BVT_ARR) bfile_getkey(pbf);
@@ -3701,8 +3701,8 @@ static void bfile_getbin(bfile_t* pbf, chbuf_t* pcb)
     | ((uint32_t)b[1] << 8)  |  (uint32_t)b[0];
   st = pbf->getc(pbf->pfile); /* subtype is ignored */
   if (pbf->kvt != BVT_BIN || n != 4 || st == EOF) bfile_ierr(pbf, "binary block expected");
-  chbclear(pcb); 
-  n = (unsigned)pbf->read(chballoc(pcb, v), 1, v, pbf->pfile);
+  cbclear(pcb); 
+  n = (unsigned)pbf->read(cballoc(pcb, v), 1, v, pbf->pfile);
   if (n != v) bfile_ierr(pbf, "unexpected end of binary block");
   pbf->kvt = 0;
 }
@@ -3714,48 +3714,48 @@ static void bfile_setkeyn(bfile_t* pbf, const char *key, size_t n)
   pcnt = bufbk(&pbf->counts);
   assert(*pcnt % 2 == 0); /* even number of keys+elts */
   *pcnt += 1; /* key is in tbuf */
-  chbset(&pbf->kbuf, key, n);
+  cbset(&pbf->kbuf, key, n);
 }
 
 static void bfile_putkey(bfile_t* pbf, bvtype_t vt)
 {
   if (!bufempty(&pbf->counts)) {
     int *pcnt = bufbk(&pbf->counts);
-    chbuf_t *pcb = bufbk(&pbf->chbufs);
+    cbuf_t *pcb = bufbk(&pbf->cbufs);
     if (*pcnt % 2 == 0) { /* no key, generate */
-      chbsetf(&pbf->kbuf, "%d", *pcnt/2);
+      cbsetf(&pbf->kbuf, "%d", *pcnt/2);
       *pcnt += 1; /* key is in tbuf */
     }
-    chbputc(0, &pbf->kbuf);
-    chbputc((int)vt, pcb);
-    chbcat(pcb, &pbf->kbuf);
-    chbclear(&pbf->kbuf); 
+    cbputc(0, &pbf->kbuf);
+    cbputc((int)vt, pcb);
+    cbcat(pcb, &pbf->kbuf);
+    cbclear(&pbf->kbuf); 
   }  
 }
 
 static void bfile_startdoc(bfile_t* pbf)
 {
-  chbinit(bufnewbk(&pbf->chbufs));
+  cbinit(bufnewbk(&pbf->cbufs));
   bufnewbk(&pbf->counts);
 }
 
 static void bfile_enddoc(bfile_t* pbf)
 {
-  chbuf_t *pcb = bufpopbk(&pbf->chbufs), *pccb;
+  cbuf_t *pcb = bufpopbk(&pbf->cbufs), *pccb;
   int *pcnt = bufpopbk(&pbf->counts);
   assert(*pcnt % 2 == 0); /* even number of keys+elts */
-  if (bufempty(&pbf->chbufs)) { 
+  if (bufempty(&pbf->cbufs)) { 
     pccb = &pbf->kbuf; 
     bufclear(pccb);
   } else { 
-    pccb = bufbk(&pbf->chbufs);
+    pccb = bufbk(&pbf->cbufs);
   }
-  chbputc(0, pcb);
-  chbput4le((unsigned)chblen(pcb)+4, pccb);
-  chbcat(pccb, pcb);
-  chbfini(pcb);
-  if (bufempty(&pbf->chbufs)) {
-    pbf->write(chbdata(pccb), 1, chblen(pccb), pbf->pfile);
+  cbputc(0, pcb);
+  cbput4le((unsigned)cblen(pcb)+4, pccb);
+  cbcat(pccb, pcb);
+  cbfini(pcb);
+  if (bufempty(&pbf->cbufs)) {
+    pbf->write(cbdata(pccb), 1, cblen(pccb), pbf->pfile);
     pbf->flush(pbf->pfile);
     bufclear(pccb);
   } else {
@@ -3775,56 +3775,56 @@ static void bfile_putnull(bfile_t* pbf)
 static void bfile_putbool(bfile_t* pbf, bool b)
 {
   int *pcnt = bufbk(&pbf->counts);
-  chbuf_t *pcb = bufbk(&pbf->chbufs);
+  cbuf_t *pcb = bufbk(&pbf->cbufs);
   assert(*pcnt % 2 == 1);
-  chbputc(b ? 1 : 0, pcb);
+  cbputc(b ? 1 : 0, pcb);
   *pcnt += 1;
 }
 
 static void bfile_puti32(bfile_t* pbf, int32_t v)
 {
   int *pcnt = bufbk(&pbf->counts);
-  chbuf_t *pcb = bufbk(&pbf->chbufs);
+  cbuf_t *pcb = bufbk(&pbf->cbufs);
   assert(*pcnt % 2 == 1);
-  chbput4le((unsigned)v, pcb);
+  cbput4le((unsigned)v, pcb);
   *pcnt += 1;
 }
 
 static void bfile_puti64(bfile_t* pbf, int64_t v)
 {
   int *pcnt = bufbk(&pbf->counts);
-  chbuf_t *pcb = bufbk(&pbf->chbufs);
+  cbuf_t *pcb = bufbk(&pbf->cbufs);
   assert(*pcnt % 2 == 1);
-  chbput8le((unsigned long long)v, pcb);
+  cbput8le((unsigned long long)v, pcb);
   *pcnt += 1;
 }
 
 static void bfile_putstr(bfile_t* pbf, const char *p, size_t n)
 {
   int *pcnt = bufbk(&pbf->counts);
-  chbuf_t *pcb = bufbk(&pbf->chbufs);
+  cbuf_t *pcb = bufbk(&pbf->cbufs);
   assert(*pcnt % 2 == 1);
-  chbput4le((unsigned)n+1, pcb);
-  chbput(p, n, pcb);
-  chbputc(0, pcb);
+  cbput4le((unsigned)n+1, pcb);
+  cbput(p, n, pcb);
+  cbputc(0, pcb);
   *pcnt += 1;
 }
 
 static void bfile_putbin(bfile_t* pbf, const char *p, size_t n)
 {
   int *pcnt = bufbk(&pbf->counts);
-  chbuf_t *pcb = bufbk(&pbf->chbufs);
+  cbuf_t *pcb = bufbk(&pbf->cbufs);
   assert(*pcnt % 2 == 1);
-  chbput4le((unsigned)n, pcb);
-  chbputc(0, pcb); /* generic binary */
-  chbput(p, n, pcb);  
+  cbput4le((unsigned)n, pcb);
+  cbputc(0, pcb); /* generic binary */
+  cbput(p, n, pcb);  
   *pcnt += 1;
 }
 
 static void bfinit_ii(BFILE* pf, pii_t pii, void *dp, bool bbuf) 
 {
   memset(pf, 0, sizeof(BFILE));
-  pf->pbf = exmalloc(sizeof(bfile_t));
+  pf->pbf = emalloc(sizeof(bfile_t));
   bfile_init_ii(pf->pbf, pii, dp, bbuf);
   pf->ownsfile = false;
   pf->loading = true;
@@ -3833,7 +3833,7 @@ static void bfinit_ii(BFILE* pf, pii_t pii, void *dp, bool bbuf)
 static void bfinit_oi(BFILE* pf, poi_t poi, void *dp, bool bbuf) 
 {
   memset(pf, 0, sizeof(BFILE));
-  pf->pbf = exmalloc(sizeof(bfile_t));
+  pf->pbf = emalloc(sizeof(bfile_t));
   bfile_init_oi(pf->pbf, poi, dp, bbuf);
   pf->ownsfile = false;
   pf->loading = false;
@@ -3843,7 +3843,7 @@ BFILE* newbfii(pii_t pii, void *dp)
 {
   BFILE* pf;
   assert(pii);
-  pf = exmalloc(sizeof(BFILE));
+  pf = emalloc(sizeof(BFILE));
   bfinit_ii(pf, pii, dp, true); 
   return pf;
 }
@@ -3852,7 +3852,7 @@ BFILE* newbfoi(poi_t poi, void *dp)
 {
   BFILE* pf;
   assert(poi);
-  pf = exmalloc(sizeof(BFILE));
+  pf = emalloc(sizeof(BFILE));
   bfinit_oi(pf, poi, dp, true); 
   return pf;
 }
@@ -3900,12 +3900,12 @@ void bfgetobrc(BFILE* pf)
   bfile_opendoc(pf->pbf, BVT_OBJ); 
 }
 
-char* bfgetkey(BFILE* pf, chbuf_t* pcb)
+char* bfgetkey(BFILE* pf, cbuf_t* pcb)
 {
   const char *key;
   assert(pf); assert(pf->loading);
   key = bfile_getkey(pf->pbf);
-  return pcb ? chbsets(pcb, key) : (char* )key;
+  return pcb ? cbsets(pcb, key) : (char* )key;
 }
 
 bool bfatcbrc(BFILE* pf)
@@ -3967,17 +3967,17 @@ double bfgetnumd(BFILE* pf)
   return bfile_getfloat(pf->pbf);
 }
 
-char* bfgetstr(BFILE* pf, chbuf_t* pcb)
+char* bfgetstr(BFILE* pf, cbuf_t* pcb)
 {
   assert(pf); assert(pf->loading);
   return bfile_getstr(pf->pbf, pcb);
 }
 
-char* bfgetbin(BFILE* pf, chbuf_t* pcb)
+char* bfgetbin(BFILE* pf, cbuf_t* pcb)
 {
   assert(pf); assert(pf->loading);
   bfile_getbin(pf->pbf, pcb);
-  return chbdata(pcb);
+  return cbdata(pcb);
 }
 
 void bfputobrk(BFILE* pf)
@@ -4094,40 +4094,40 @@ void bfputbin(BFILE* pf, const char *str, size_t n)
 
 /* hex string converters */
 
-char* hexencode(const char *s, chbuf_t* pcb)
+char* hexencode(const char *s, cbuf_t* pcb)
 {
   assert(s);
   assert(pcb);
-  chbclear(pcb);
+  cbclear(pcb);
   while (*s) {
     unsigned hl = (int)*s++;
     unsigned h = (hl >> 4) & 0x0f;
     unsigned l = hl & 0x0f;
-    chbputc((h < 10) ? '0' + h : 'a' + (h-10), pcb);
-    chbputc((l < 10) ? '0' + l : 'a' + (l-10), pcb);
+    cbputc((h < 10) ? '0' + h : 'a' + (h-10), pcb);
+    cbputc((l < 10) ? '0' + l : 'a' + (l-10), pcb);
   }
-  return chbdata(pcb);
+  return cbdata(pcb);
 }
 
 /* encodes n bytes of s into pcb using [0-9a-f] alphabet */
-char* hexnencode(const char *s, size_t n, chbuf_t* pcb)
+char* hexnencode(const char *s, size_t n, cbuf_t* pcb)
 {
   size_t i;
   assert(s);
   assert(pcb);
-  chbclear(pcb);
+  cbclear(pcb);
   for (i = 0; i < n; ++i) {
     unsigned hl = (int)s[i];
     unsigned h = (hl >> 4) & 0xF;
     unsigned l = hl & 0xF;
-    chbputc((h < 10) ? '0' + h : 'a' + (h-10), pcb);
-    chbputc((l < 10) ? '0' + l : 'a' + (l-10), pcb);
+    cbputc((h < 10) ? '0' + h : 'a' + (h-10), pcb);
+    cbputc((l < 10) ? '0' + l : 'a' + (l-10), pcb);
   }
-  return chbdata(pcb);
+  return cbdata(pcb);
 }
 
 /* ignores '-' and white space, returns NULL on errors; use cb length for binary data */
-char* hexdecode(const char *s, chbuf_t* pcb)
+char* hexdecode(const char *s, cbuf_t* pcb)
 {
   int hexu[256] = {
    -4,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -2,  -1,  -1,  -2,  -1,  -1,  -2,  -2,
@@ -4149,7 +4149,7 @@ char* hexdecode(const char *s, chbuf_t* pcb)
   };
   assert(s);
   assert(pcb);
-  chbclear(pcb);
+  cbclear(pcb);
   for (;;) {
     int b = 0, h, l, c;
     do { c = *s++; h = hexu[c & 0xff]; } while (h == -1); /* skip spaces and - */
@@ -4161,9 +4161,9 @@ char* hexdecode(const char *s, chbuf_t* pcb)
     assert(l == -4 || l == -2 || (l >= 0 && l <= 15));
     if (l == -4 || l == -2) return NULL; /* error if eos or invalid */
     b |= l;
-    chbputc(b & 0xff, pcb);
+    cbputc(b & 0xff, pcb);
   }
-  return chbdata(pcb);
+  return cbdata(pcb);
 }
 
 
@@ -4317,7 +4317,7 @@ void sha256fini(sha256ctx_t *ctx, uint8_t digest[SHA256DG_SIZE])
   memset(ctx, 0, sizeof(sha256ctx_t));
 }
 
-char *memsha256(const void *mem, size_t len, chbuf_t *pcb)
+char *memsha256(const void *mem, size_t len, cbuf_t *pcb)
 {
   sha256ctx_t context;
   uint8_t digest[SHA256DG_SIZE];
@@ -4327,5 +4327,5 @@ char *memsha256(const void *mem, size_t len, chbuf_t *pcb)
   sha256init(&context);
   sha256update(&context, (const uint8_t*)mem, len);
   sha256fini(&context, digest);
-  return chbset(pcb, ds, SHA256DG_SIZE);
+  return cbset(pcb, ds, SHA256DG_SIZE);
 }

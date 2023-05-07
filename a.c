@@ -36,7 +36,7 @@ void init_archiver(void)
   dsbinit(&g_inpats);
   dsbinit(&g_expats);
   dsbinit(&g_unpats);
-  g_buffer = exmalloc(g_bufsize);
+  g_buffer = emalloc(g_bufsize);
 } 
 
 void fini_archiver(void)
@@ -53,28 +53,28 @@ void fini_archiver(void)
 
 void addpat(dsbuf_t *pdsb, const char *arg, int flags)
 {
-  chbuf_t cb = mkchb(); char *pat; 
+  cbuf_t cb = mkcb(); char *pat; 
   size_t len = strlen(arg);
   if (len > 0 && arg[len-1] == '/') --len;
-  chbset(&cb, arg, len);
-  chbinsc(&cb, 0, '0'+flags);
-  pat = chbdata(&cb); 
+  cbset(&cb, arg, len);
+  cbinsc(&cb, 0, '0'+flags);
+  pat = cbdata(&cb); 
   dsbpushbk(pdsb, &pat);
-  chbfini(&cb);
+  cbfini(&cb);
 }
 
 void loadpats(dsbuf_t *pdsb, const char *fname, int flags)
 {
   FILE *fp = fopen(fname, "r");
-  chbuf_t cb = mkchb(); char *line;
-  if (!fp) exprintf("can't open excluded patterns file %s:", g_exfile);
+  cbuf_t cb = mkcb(); char *line;
+  if (!fp) eprintf("can't open excluded patterns file %s:", g_exfile);
   while ((line = fgetlb(&cb, fp)) != NULL) {
     line = strtrim(line);
     if (*line == 0 || *line == '#') continue;
     addpat(&g_expats, line, flags);
   }
   fclose(fp);
-  chbfini(&cb);
+  cbfini(&cb);
 }
 
 bool matchpats(const char *path, const char *fname, dsbuf_t *pdsb)
@@ -141,18 +141,18 @@ uint32_t unpack_uint32_le(uint8_t buf[4])
 
 void parse_header_files_json(JFILE *jfp, const char *base, fdebuf_t *pfdb)
 {
-  chbuf_t kcb = mkchb(), ncb = mkchb();
+  cbuf_t kcb = mkcb(), ncb = mkcb();
   jfgetobrc(jfp);
   while (!jfatcbrc(jfp)) {
     fdent_t *pfde = fdebnewbk(pfdb);
     jfgetkey(jfp, &ncb); /* name: */
-    vverbosef("%s/%s\n", base, chbdata(&ncb));
-    pfde->name = exstrdup(chbdata(&ncb));
+    vverbosef("%s/%s\n", base, cbdata(&ncb));
+    pfde->name = estrdup(cbdata(&ncb));
     jfgetobrc(jfp);
     while (!jfatcbrc(jfp)) {
       char *key = jfgetkey(jfp, &kcb);
       if (streql(key, "files")) {
-        char *nbase = chbsetf(&kcb, "%s/%s", base, chbdata(&ncb));
+        char *nbase = cbsetf(&kcb, "%s/%s", base, cbdata(&ncb));
         pfde->isdir = true;
         parse_header_files_json(jfp, nbase, &pfde->files);
       } else if (streql(key, "offset")) { 
@@ -174,16 +174,16 @@ void parse_header_files_json(JFILE *jfp, const char *base, fdebuf_t *pfdb)
             pfde->integrity_algorithm = streql(ia, "SHA256");
           } else if (streql(key, "hash")) {
             char *hash = jfgetbin(jfp, &kcb);
-            if (pfde->integrity_algorithm == 1 && chblen(&kcb) == SHA256DG_SIZE)
-              pfde->integrity_hash = exmemdup(hash, SHA256DG_SIZE);
+            if (pfde->integrity_algorithm == 1 && cblen(&kcb) == SHA256DG_SIZE)
+              pfde->integrity_hash = ememdup(hash, SHA256DG_SIZE);
           } else if (streql(key, "blockSize")) {
             pfde->integrity_block_size = (unsigned long)jfgetnumull(jfp); 
           } else if (streql(key, "blocks")) {
             jfgetobrk(jfp);
             while (!jfatcbrk(jfp)) {
               char *block = jfgetstr(jfp, &kcb);
-              if (pfde->integrity_algorithm == 1 && chblen(&kcb) == SHA256DG_SIZE) {
-                *dsbnewbk(&pfde->integrity_blocks) = exmemdup(block, SHA256DG_SIZE);
+              if (pfde->integrity_algorithm == 1 && cblen(&kcb) == SHA256DG_SIZE) {
+                *dsbnewbk(&pfde->integrity_blocks) = ememdup(block, SHA256DG_SIZE);
               }  
             }
             jfgetcbrk(jfp);
@@ -191,7 +191,7 @@ void parse_header_files_json(JFILE *jfp, const char *base, fdebuf_t *pfdb)
         }
         jfgetcbrc(jfp);
       } else { 
-        exprintf("%s: invalid entry: %s", g_arfile, chbdata(&kcb));
+        eprintf("%s: invalid entry: %s", g_arfile, cbdata(&kcb));
       }
     }
     if (!pfde->isdir) {
@@ -205,23 +205,23 @@ void parse_header_files_json(JFILE *jfp, const char *base, fdebuf_t *pfdb)
     jfgetcbrc(jfp);
   }
   jfgetcbrc(jfp);
-  chbfini(&kcb), chbfini(&ncb);
+  cbfini(&kcb), cbfini(&ncb);
 }
 
 void parse_header_files_bson(BFILE *bfp, const char *base, fdebuf_t *pfdb)
 {
-  chbuf_t kcb = mkchb(), ncb = mkchb();
+  cbuf_t kcb = mkcb(), ncb = mkcb();
   bfgetobrc(bfp);
   while (!bfatcbrc(bfp)) {
     fdent_t *pfde = fdebnewbk(pfdb);
     bfgetkey(bfp, &ncb); /* name: */
-    vverbosef("%s/%s\n", base, chbdata(&ncb));
-    pfde->name = exstrdup(chbdata(&ncb));
+    vverbosef("%s/%s\n", base, cbdata(&ncb));
+    pfde->name = estrdup(cbdata(&ncb));
     bfgetobrc(bfp);
     while (!bfatcbrc(bfp)) {
       char *key = bfgetkey(bfp, &kcb);
       if (streql(key, "files")) {
-        char *nbase = chbsetf(&kcb, "%s/%s", base, chbdata(&ncb));
+        char *nbase = cbsetf(&kcb, "%s/%s", base, cbdata(&ncb));
         pfde->isdir = true;
         parse_header_files_bson(bfp, nbase, &pfde->files);
       } else if (streql(key, "offset")) { 
@@ -242,8 +242,8 @@ void parse_header_files_bson(BFILE *bfp, const char *base, fdebuf_t *pfdb)
             if (integrity == 1) pfde->integrity_algorithm = 1; /* SHA256 */
           } else if (streql(key, "hash")) {
             char *hash = bfgetbin(bfp, &kcb);
-            if (integrity == 1 && chblen(&kcb) == SHA256DG_SIZE)
-              pfde->integrity_hash = exmemdup(hash, SHA256DG_SIZE);
+            if (integrity == 1 && cblen(&kcb) == SHA256DG_SIZE)
+              pfde->integrity_hash = ememdup(hash, SHA256DG_SIZE);
           } else if (streql(key, "blockSize")) {
             unsigned long n = (unsigned long)bfgetnumull(bfp);
             if (integrity == 1) pfde->integrity_block_size = n; 
@@ -251,8 +251,8 @@ void parse_header_files_bson(BFILE *bfp, const char *base, fdebuf_t *pfdb)
             bfgetobrk(bfp);
             while (!bfatcbrk(bfp)) {
               char *block = bfgetbin(bfp, &kcb);
-              if (integrity == 1 && chblen(&kcb) == SHA256DG_SIZE) {
-                *dsbnewbk(&pfde->integrity_blocks) = exmemdup(block, SHA256DG_SIZE);
+              if (integrity == 1 && cblen(&kcb) == SHA256DG_SIZE) {
+                *dsbnewbk(&pfde->integrity_blocks) = ememdup(block, SHA256DG_SIZE);
               }  
             }
             bfgetcbrk(bfp);
@@ -260,7 +260,7 @@ void parse_header_files_bson(BFILE *bfp, const char *base, fdebuf_t *pfdb)
         }
         bfgetcbrc(bfp);
       } else { 
-        exprintf("%s: invalid entry: %s", g_arfile, chbdata(&kcb));
+        eprintf("%s: invalid entry: %s", g_arfile, cbdata(&kcb));
       }
     }
     if (!pfde->isdir) {
@@ -274,7 +274,7 @@ void parse_header_files_bson(BFILE *bfp, const char *base, fdebuf_t *pfdb)
     bfgetcbrc(bfp);
   }
   bfgetcbrc(bfp);
-  chbfini(&kcb), chbfini(&ncb);
+  cbfini(&kcb), cbfini(&ncb);
 }
 
 uint32_t read_header(FILE *fp, fdebuf_t *pfdb)
@@ -286,56 +286,56 @@ uint32_t read_header(FILE *fp, fdebuf_t *pfdb)
   psz = unpack_uint32_le(hbuf);
   if (psz == 3) format = 'b';
   else if (psz == 4) format = 'a';
-  else exprintf("%s: invalid archive header", g_arfile);
+  else eprintf("%s: invalid archive header", g_arfile);
   if (format == 'a') { /* asar, 4-word signature */ 
     JFILE *jfp; uint32_t x;
-    chbuf_t kcb = mkchb();
+    cbuf_t kcb = mkcb();
     if (fread(hbuf+4, 12, 1, fp) != 1) goto err;
     off = unpack_uint32_le(hbuf+4);  
     asz = unpack_uint32_le(hbuf+8);  
     ssz = unpack_uint32_le(hbuf+12);
-    if (ssz < 12) exprintf("%s: invalid asar archive header [3]", g_arfile);
+    if (ssz < 12) eprintf("%s: invalid asar archive header [3]", g_arfile);
     x = ssz + 4; if (x % 4 > 0) x += 4 - (x % 4); /* align to 32 bit */
-    if (x != asz) exprintf("%s: invalid asar archive header [2]", g_arfile);
+    if (x != asz) eprintf("%s: invalid asar archive header [2]", g_arfile);
     x += 4;
-    if (x != off) exprintf("%s: invalid asar archive header [1]", g_arfile); 
+    if (x != off) eprintf("%s: invalid asar archive header [1]", g_arfile); 
     off += 12; /* from the start of the file */
     /* header starts right after 4-word signature */
     jfp = newjfii(FILE_pii, fp);
     jfgetobrc(jfp);
     jfgetkey(jfp, &kcb); /* "files": */
-    if (!streql(chbdata(&kcb), "files")) exprintf("%s: invalid asar file list", g_arfile);
+    if (!streql(cbdata(&kcb), "files")) eprintf("%s: invalid asar file list", g_arfile);
     parse_header_files_json(jfp, "", pfdb);
     jfgetcbrc(jfp);
     freejf(jfp);
-    chbfini(&kcb);
+    cbfini(&kcb);
   } else { /* bsar, 3-word signature */
-    BFILE *bfp; chbuf_t kcb = mkchb();
+    BFILE *bfp; cbuf_t kcb = mkcb();
     if (fread(hbuf+4, 8, 1, fp) != 1) goto err;
     off = unpack_uint32_le(hbuf+4);  
     asz = unpack_uint32_le(hbuf+8);  
     ssz = 0;
-    if (asz != off) exprintf("%s: invalid bsar archive header [1]", g_arfile);
+    if (asz != off) eprintf("%s: invalid bsar archive header [1]", g_arfile);
     off += 12; /* from the start of the file */
     /* header starts right after 3-word signature */
     bfp = newbfii(FILE_pii, fp);
     bfgetobrc(bfp);
     bfgetkey(bfp, &kcb); /* "files": */
-    if (!streql(chbdata(&kcb), "files")) exprintf("%s: invalid bsar file list", g_arfile);
+    if (!streql(cbdata(&kcb), "files")) eprintf("%s: invalid bsar file list", g_arfile);
     parse_header_files_bson(bfp, "", pfdb);
     bfgetcbrc(bfp);
     freebf(bfp);
-    chbfini(&kcb);
+    cbfini(&kcb);
   }
   return off;
 err:
-  exprintf("%s: can't read archive header", g_arfile);
+  eprintf("%s: can't read archive header", g_arfile);
   return 0;
 }
 
 void unparse_header_files_json(JFILE *jfp, fdebuf_t *pfdb)
 {
-  size_t i; chbuf_t cb = mkchb();
+  size_t i; cbuf_t cb = mkcb();
   jfputobrc(jfp);
   for (i = 0; i < fdeblen(pfdb); ++i) {
     fdent_t *pfde = fdebref(pfdb, i);
@@ -357,7 +357,7 @@ void unparse_header_files_json(JFILE *jfp, fdebuf_t *pfdb)
       } else {      
         jfputkey(jfp, "offset");
         /* NB: asar string (js exact num range is 53 bits) */
-        jfputstr(jfp, chbsetf(&cb, "%llu", pfde->offset)); 
+        jfputstr(jfp, cbsetf(&cb, "%llu", pfde->offset)); 
       }
       if (pfde->executable) { 
         jfputkey(jfp, "executable"); 
@@ -390,12 +390,12 @@ void unparse_header_files_json(JFILE *jfp, fdebuf_t *pfdb)
     jfputcbrc(jfp);
   }
   jfputcbrc(jfp);
-  chbfini(&cb);  
+  cbfini(&cb);  
 }
 
 void unparse_header_files_bson(BFILE *bfp, fdebuf_t *pfdb)
 {
-  size_t i; chbuf_t cb = mkchb();
+  size_t i; cbuf_t cb = mkcb();
   bfputobrc(bfp);
   for (i = 0; i < fdeblen(pfdb); ++i) {
     fdent_t *pfde = fdebref(pfdb, i);
@@ -449,13 +449,13 @@ void unparse_header_files_bson(BFILE *bfp, fdebuf_t *pfdb)
     bfputcbrc(bfp);
   }
   bfputcbrc(bfp);
-  chbfini(&cb);  
+  cbfini(&cb);  
 }
 
 void write_header(int format, fdebuf_t *pfdb, FILE *fp)
 {
   uint8_t hbuf[16]; uint32_t psz, off, asz, ssz;
-  chbuf_t hcb = mkchb();
+  cbuf_t hcb = mkcb();
   /* serialize header data to hcb */
   if (format == 'a') {
     JFILE *jfp = newjfoi(cbuf_poi, &hcb);
@@ -473,7 +473,7 @@ void write_header(int format, fdebuf_t *pfdb, FILE *fp)
     freebf(bfp);
   }
   /* write header data to fp */
-  ssz = (uint32_t)chblen(&hcb);
+  ssz = (uint32_t)cblen(&hcb);
   if (format == 'a') { /* asar, 4-word signature */
     psz = 4; 
     asz = ssz + 4; /* add at least 4 bytes */ 
@@ -493,26 +493,26 @@ void write_header(int format, fdebuf_t *pfdb, FILE *fp)
     pack_uint32_le(asz, hbuf+8);  
   }
   if (fwrite(hbuf, psz*4, 1, fp) != 1) goto err;
-  if (fwrite(chbdata(&hcb), ssz, 1, fp) != 1) goto err;
+  if (fwrite(cbdata(&hcb), ssz, 1, fp) != 1) goto err;
   if (asz > ssz) {
     memset(hbuf, 0, 16);
     if (fwrite(hbuf, asz-ssz, 1, fp) != 1) goto err;
   }
-  chbfini(&hcb);
+  cbfini(&hcb);
   return;
 err: 
-  exprintf("%s: can't write archive header", g_arfile);
+  eprintf("%s: can't write archive header", g_arfile);
 }
 
 
 void list_files(const char *base, fdebuf_t *pfdb, dsbuf_t *ppats, bool full, FILE *pf)
 {
-  size_t i; chbuf_t cb = mkchb();
+  size_t i; cbuf_t cb = mkcb();
   for (i = 0; i < fdeblen(pfdb); ++i) {
     fdent_t *pfde = fdebref(pfdb, i); 
     dsbuf_t *ppatsi = ppats; const char *sbase;
     if (!base) sbase = pfde->name;
-    else sbase = chbsetf(&cb, "%s/%s", base, pfde->name);
+    else sbase = cbsetf(&cb, "%s/%s", base, pfde->name);
     if (matchpats(sbase, pfde->name, &g_expats)) continue;
     /* ppats == NULL means list this one and everything below */
     if (ppatsi && matchpats(sbase, pfde->name, ppatsi)) ppatsi = NULL;
@@ -539,7 +539,7 @@ void list_files(const char *base, fdebuf_t *pfdb, dsbuf_t *ppats, bool full, FIL
       }
     }
   }
-  chbfini(&cb);
+  cbfini(&cb);
 }
 
 void list(int argc, char **argv)
@@ -547,7 +547,7 @@ void list(int argc, char **argv)
   FILE *fp; uint32_t hsz; 
   fdebuf_t fdeb; fdebinit(&fdeb);
   while (argc-- > 0) addpat(&g_inpats, *argv++, PAT_LITERAL);
-  if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file %s:", g_arfile);
+  if (!(fp = fopen(g_arfile, "rb"))) eprintf("can't open archive file %s:", g_arfile);
   hsz = read_header(fp, &fdeb);
   list_files(NULL, &fdeb, dsbempty(&g_inpats) ? NULL : &g_inpats, getverbosity()>0, stdout);
   fdebfini(&fdeb);
@@ -572,12 +572,12 @@ size_t copy_file(FILE *ifp, FILE *ofp)
 
 void write_file(const char *path, fdent_t *pfde, FILE *ofp)
 {
-  chbuf_t cb = mkchb(); FILE *ifp;  
+  cbuf_t cb = mkcb(); FILE *ifp;  
   sha256ctx_t fhash, bhash;
   uint8_t digest[SHA256DG_SIZE];
   size_t bc = 0;
   if ((ifp = fopen(path, "rb")) == NULL) {
-    exprintf("%s: cannot open file:", path);
+    eprintf("%s: cannot open file:", path);
   }
   if (g_integrity == 1) {
     pfde->integrity_algorithm = g_integrity;
@@ -590,7 +590,7 @@ void write_file(const char *path, fdent_t *pfde, FILE *ofp)
       sha256init(&bhash);
       sha256update(&bhash, g_buffer, n);
       sha256fini(&bhash, digest);
-      *dsbnewbk(&pfde->integrity_blocks) = exmemdup((char*)&digest[0], SHA256DG_SIZE);
+      *dsbnewbk(&pfde->integrity_blocks) = ememdup((char*)&digest[0], SHA256DG_SIZE);
       sha256update(&fhash, g_buffer, n);
     }
     if (!n) break;
@@ -599,15 +599,15 @@ void write_file(const char *path, fdent_t *pfde, FILE *ofp)
     if (n < g_bufsize) break;
   }
   if (bc != pfde->size) {
-    exprintf("%s: actual file size (%llu) is different from stat file size (%llu)",
+    eprintf("%s: actual file size (%llu) is different from stat file size (%llu)",
       (unsigned long long)bc, (unsigned long long)pfde->size);
   }
   if (g_integrity == 1) {
     sha256fini(&fhash, digest);
-    pfde->integrity_hash = exmemdup((char*)&digest[0], SHA256DG_SIZE);
+    pfde->integrity_hash = ememdup((char*)&digest[0], SHA256DG_SIZE);
   }
   fclose(ifp);
-  chbfini(&cb);
+  cbfini(&cb);
 }
 
 uint64_t create_files(uint64_t off, const char *base, const char *path, fdebuf_t *pfdeb, FILE *ofp)
@@ -618,29 +618,29 @@ uint64_t create_files(uint64_t off, const char *base, const char *path, fdebuf_t
     fname = getfname(path);
     if (matchpats(base, fname, &g_expats)) return off;
     pfde = fdebnewbk(pfdeb);
-    pfde->name = exstrdup(fname);
+    pfde->name = estrdup(fname);
     pfde->isdir = st.isdir;
     pfde->size = st.size;
     if (matchpats(base, fname, &g_unpats)) {
       pfde->unpacked = true;
     } else {
       if (pfde->isdir) {
-        chbuf_t cbb = mkchb(), cbp = mkchb();
+        cbuf_t cbb = mkcb(), cbp = mkcb();
         dsbuf_t dsb; dsbinit(&dsb);
         if (dir(path, &dsb)) {
           size_t i;
           for (i = 0; i < dsblen(&dsb); ++i) {
             dstr_t *pds = dsbref(&dsb, i); char *nb, *np;
             if (streql(*pds, ".") || streql(*pds, "..")) continue;
-            nb = *base ? chbsetf(&cbb, "%s/%s", base, *pds) : *pds;
-            np = chbsetf(&cbp, "%s/%s", path, *pds);
+            nb = *base ? cbsetf(&cbb, "%s/%s", base, *pds) : *pds;
+            np = cbsetf(&cbp, "%s/%s", path, *pds);
             off = create_files(off, nb, np, &pfde->files, ofp);
           }
         } else {
-          exprintf("can't open directory: %s", path);
+          eprintf("can't open directory: %s", path);
         }
         dsbfini(&dsb);
-        chbfini(&cbb), chbfini(&cbp);
+        cbfini(&cbb), cbfini(&cbp);
       } else {
         pfde->offset = off;
         off += pfde->size;
@@ -648,7 +648,7 @@ uint64_t create_files(uint64_t off, const char *base, const char *path, fdebuf_t
       }
     }
   } else {
-    exprintf("can't stat file or directory: %s", path);
+    eprintf("can't stat file or directory: %s", path);
   }
   return off;
 }
@@ -657,7 +657,7 @@ void create(int argc, char **argv)
 {
   FILE *fp, *tfp; fdebuf_t fdeb;
   int i, format; uint64_t off = 0;
-  if (!(fp = fopen(g_arfile, "wb"))) exprintf("can't open archive file %s:", g_arfile);
+  if (!(fp = fopen(g_arfile, "wb"))) eprintf("can't open archive file %s:", g_arfile);
   format = g_format ? g_format : strsuf(g_arfile, ".asar") ? 'a' : 'b';
   tfp = etmpopen("w+b");
   fdebinit(&fdeb);
@@ -721,12 +721,12 @@ size_t copy_file_n(FILE *ifp, FILE *ofp, size_t bytec, fdent_t *pfde)
 
 void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppats, FILE *fp)
 {
-  size_t i; chbuf_t cb = mkchb();
+  size_t i; cbuf_t cb = mkcb();
   for (i = 0; i < fdeblen(pfdb); ++i) {
     fdent_t *pfde = fdebref(pfdb, i);
     dsbuf_t *ppatsi = ppats; const char *sbase;
     if (!base) sbase = pfde->name;
-    else sbase = chbsetf(&cb, "%s/%s", base, pfde->name);
+    else sbase = cbsetf(&cb, "%s/%s", base, pfde->name);
     if (matchpats(sbase, pfde->name, &g_expats)) continue;
     /* ppats == NULL means extract this one and everything below */
     if (ppatsi && matchpats(sbase, pfde->name, ppatsi)) ppatsi = NULL;
@@ -742,15 +742,15 @@ void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppat
         else logef("@%-12lu %12lu ", (unsigned long)pfde->offset, (unsigned long)pfde->size);
       }
       logef("%s\n", sbase);
-      if (fseekll(fp, pos, SEEK_SET) != 0) exprintf("%s: seek failed", g_arfile);
+      if (fseekll(fp, pos, SEEK_SET) != 0) eprintf("%s: seek failed", g_arfile);
       if (streql(g_dstdir, "-")) {
         n = copy_file_n(fp, stdout, fsz, pfde);
       } else {
-        chbuf_t fcb = mkchb(), dcb = mkchb();
-        char *dstdir = trimdirsep(chbsets(&dcb, g_dstdir));
+        cbuf_t fcb = mkcb(), dcb = mkcb();
+        char *dstdir = trimdirsep(cbsets(&dcb, g_dstdir));
         char *dpath = (streql(dstdir, ".")) ?
-          chbsets(&fcb, sbase) : chbsetf(&fcb, "%s%c%s", dstdir, dirsep, sbase);
-        char *ddir = chbset(&dcb, dpath, spanfdir(dpath));
+          cbsets(&fcb, sbase) : cbsetf(&fcb, "%s%c%s", dstdir, dirsep, sbase);
+        char *ddir = cbset(&dcb, dpath, spanfdir(dpath));
         FILE *ofp;
         if (!direxists(ddir)) {
           vverbosef("%s: creating missing directories on path: %s\n", progname(), ddir);
@@ -762,17 +762,17 @@ void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppat
         }
         ofp = fopen(dpath, "wb");
         if (!ofp) {
-          exprintf("%s: can't open file for writing:", dpath);
+          eprintf("%s: can't open file for writing:", dpath);
         } else { 
           n = copy_file_n(fp, ofp, fsz, pfde); 
           fclose(ofp); 
         }
-        chbfini(&fcb), chbfini(&dcb);
+        cbfini(&fcb), cbfini(&dcb);
       }
-      if (n != fsz) exprintf("%s: unexpected end of archive", g_arfile);
+      if (n != fsz) eprintf("%s: unexpected end of archive", g_arfile);
     }
   }
-  chbfini(&cb);
+  cbfini(&cb);
 }
 
 void extract(int argc, char **argv)
@@ -780,7 +780,7 @@ void extract(int argc, char **argv)
   FILE *fp; uint32_t hsz; 
   fdebuf_t fdeb; fdebinit(&fdeb);
   while (argc-- > 0) addpat(&g_inpats, *argv++, PAT_LITERAL);
-  if (!(fp = fopen(g_arfile, "rb"))) exprintf("can't open archive file %s:", g_arfile);
+  if (!(fp = fopen(g_arfile, "rb"))) eprintf("can't open archive file %s:", g_arfile);
   hsz = read_header(fp, &fdeb);
   extract_files(NULL, hsz, &fdeb, dsbempty(&g_inpats) ? NULL : &g_inpats, fp);
   fdebfini(&fdeb);
