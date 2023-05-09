@@ -2174,13 +2174,13 @@ static void jfile_ierr(jfile_t* pjf, const char *fmt, ...)
   va_end(args);
 }
 
-static void jfile_oerr(jfile_t* pjf, const char *fmt, ...)
+/* static void jfile_oerr(jfile_t* pjf, const char *fmt, ...)
 {
   va_list args;
   va_start(args, fmt);
   jfile_verr(false, pjf, fmt, args);
   va_end(args);
-}
+} */
 
 /* json token types */
 typedef enum jtoken_tag {
@@ -2675,7 +2675,7 @@ static char* jfile_tstring(jfile_t* pjf, cbuf_t* pcb)
 /* decode lookahead string token as hex sequence into pcb */
 static char* jfile_tbin(jfile_t* pjf, cbuf_t* pcb)
 {
-  char *ts; int32_t c32h = 0;
+  char *ts;
   assert(pjf->tt == JTK_STRING);
   cbclear(pcb);
   ts = cbdata(&pjf->tbuf);
@@ -3543,13 +3543,13 @@ static void bfile_ierr(bfile_t* pbf, const char *fmt, ...)
   va_end(args);
 }
 
-static void bfile_oerr(bfile_t* pbf, const char *fmt, ...)
+/* static void bfile_oerr(bfile_t* pbf, const char *fmt, ...)
 {
   va_list args;
   va_start(args, fmt);
   bfile_verr(false, pbf, fmt, args);
   va_end(args);
-}
+} */
 
 static bool supported_vt(bvtype_t vt)
 {
@@ -4322,7 +4322,6 @@ char *memsha256(const void *mem, size_t len, cbuf_t *pcb)
   sha256ctx_t context;
   uint8_t digest[SHA256DG_SIZE];
   const char *ds = (const char *)digest;
-  char *res = NULL;
   assert(mem); assert(pcb);
   sha256init(&context);
   sha256update(&context, (const uint8_t*)mem, len);

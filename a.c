@@ -280,7 +280,7 @@ void parse_header_files_bson(BFILE *bfp, const char *base, fdebuf_t *pfdb)
 uint32_t read_header(FILE *fp, fdebuf_t *pfdb)
 {
   uint8_t hbuf[16]; uint32_t psz, off, asz, ssz;
-  int format; /* 'a': asar, 'b': bsar */ 
+  int format = 0; /* 'a': asar, 'b': bsar */ 
   /* read header data from fp */
   if (fread(hbuf, 4, 1, fp) != 1) goto err;
   psz = unpack_uint32_le(hbuf);
@@ -733,7 +733,7 @@ void extract_files(const char *base, uint32_t hsz, fdebuf_t *pfdb, dsbuf_t *ppat
     if (pfde->isdir) {
       extract_files(sbase, hsz, &pfde->files, ppatsi, fp);
     } else if (!ppatsi && !pfde->unpacked) {
-      size_t n, fsz = (size_t)pfde->size; 
+      size_t n = 0, fsz = (size_t)pfde->size; 
       long long pos = (long long)hsz + (long long)pfde->offset;
       if (getverbosity() > 0) {
         logef("-%c%c%c ", pfde->integrity_hash ? 'i' : '-',
